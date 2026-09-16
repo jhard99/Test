@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +44,17 @@ _PAYWALL_MARKERS = re.compile(
 
 
 def _soup(html: str) -> BeautifulSoup:
-    try:
-        return BeautifulSoup(html, "lxml")
-    except Exception:  # lxml missing or malformed markup
-        return BeautifulSoup(html, "html.parser")
+    # Feeds hand us all sorts of things in a summary field - a bare URL, a
+    # filename, a single word. BeautifulSoup warns that those "look more like a
+    # filename than HTML", which is true and harmless here: flattening a
+    # non-HTML string is exactly what html_to_text is for. Silence just that
+    # warning so it can't bury a real one.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", MarkupResemblesLocatorWarning)
+        try:
+            return BeautifulSoup(html, "lxml")
+        except Exception:  # lxml missing or malformed markup
+            return BeautifulSoup(html, "html.parser")
 
 
 def html_to_text(html: str) -> str:

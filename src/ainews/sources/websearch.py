@@ -13,7 +13,15 @@ from typing import Any
 import anthropic
 from dateutil import parser as date_parser
 
-from ainews.llm import build_client, capabilities, resolve_model, supports_adaptive_thinking
+from ainews.llm import (
+    CREDENTIALS_HINT,
+    LLMError,
+    build_client,
+    capabilities,
+    is_credentials_error,
+    resolve_model,
+    supports_adaptive_thinking,
+)
 from ainews.models import Item
 from ainews.sources.base import Source, register
 
@@ -87,7 +95,11 @@ class WebSearchSource(Source):
         elif blocked:
             tool["blocked_domains"] = blocked
 
-        client = build_client(llm_cfg)
+        try:
+            client = build_client(llm_cfg)
+        except LLMError as exc:
+            log.warning("%s: skipped - %s", self.name, exc)
+            return []
         window = f"{since.date().isoformat()} to {datetime.now(timezone.utc).date().isoformat()}"
         items: dict[str, Item] = {}
 
@@ -117,6 +129,14 @@ class WebSearchSource(Source):
             except anthropic.APIError as exc:
                 log.warning("%s: web search failed for %r: %s", self.name, query, exc)
                 continue
+            except TypeError as exc:
+                # The SDK reports unresolvable credentials as a bare TypeError at
+                # request time. Every remaining query would fail identically, so
+                # give up on the source instead of repeating the error five times.
+                if not is_credentials_error(exc):
+                    raise
+                log.warning("%s: skipped - %s", self.name, CREDENTIALS_HINT)
+                return []
 
             for result in self._results(response):
                 url = result.get("url")

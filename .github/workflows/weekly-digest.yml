@@ -23,6 +23,9 @@ on:
 
 permissions:
   contents: write
+  # The digest is posted as an issue, so it lands somewhere you get notified
+  # about even with no SMTP secrets configured.
+  issues: write
 
 concurrency:
   group: weekly-digest
@@ -71,6 +74,13 @@ jobs:
           chmod 600 cookies.txt
           echo "NEWS_COOKIES_FILE=$PWD/cookies.txt" >> "$GITHUB_ENV"
 
+      # Feeds die quietly: they 404, or keep answering 200 while frozen. This
+      # reports every source's real item count and never fails the run, so a
+      # dead feed shows up in the log instead of just thinning the digest.
+      - name: Probe sources
+        continue-on-error: true
+        run: python -m ainews check --probe || true
+
       - name: Generate and send digest
         env:
           # Only needed with llm.provider: anthropic. For Bedrock, drop this and
@@ -83,6 +93,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          # Reddit's robots.txt disallows anonymous reads, so the reddit source
+          # uses the OAuth API. Register a "script" app at
+          # https://www.reddit.com/prefs/apps. Unset = the source sits out.
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           IMAP_HOST: ${{ secrets.IMAP_HOST }}
           IMAP_PORT: ${{ secrets.IMAP_PORT }}
           IMAP_USER: ${{ secrets.IMAP_USER }}
@@ -103,6 +118,37 @@ jobs:
       - name: Remove cookies
         if: always()
         run: rm -f cookies.txt
+
+      # Delivery that needs no secrets at all: the digest becomes an issue, so
+      # you get a GitHub notification even before SMTP is set up. Email (above)
+      # still goes out when the SMTP secrets exist; this is in addition to it.
+      - name: Post digest as an issue
+        # success() is explicit: adding any `if` to a step drops the implicit
+        # "only if nothing failed" guard, and a failed run must not post.
+        if: ${{ success() && github.event.inputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          digest="$(ls -t digests/*.md 2>/dev/null | head -1 || true)"
+          if [ -z "$digest" ]; then
+            echo "No digest markdown found - nothing to post."
+            exit 0
+          fi
+          title="AI weekly — $(basename "$digest" .md)"
+          # An issue body is capped at 65536 characters; keep well under it and
+          # point at the committed file for the full text.
+          body_file="$(mktemp)"
+          head -c 60000 "$digest" > "$body_file"
+          if [ "$(wc -c < "$digest")" -gt 60000 ]; then
+            printf '\n\n---\n_Truncated. Full digest: `%s` in this repository._\n' \
+              "$digest" >> "$body_file"
+          fi
+          gh issue create --title "$title" --body-file "$body_file" \
+            --repo "$GITHUB_REPOSITORY" || {
+              echo "Could not create the issue (are Issues enabled for this repo?)."
+              exit 0
+            }
 
       - name: Upload digest
         if: always()

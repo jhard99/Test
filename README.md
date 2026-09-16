@@ -25,7 +25,7 @@ sources ──► dedupe ──► triage (Claude) ──► cluster (Claude) �
 | `imap` | **Your newsletter subscriptions**, read straight from your inbox — Import AI, TLDR AI, Ben's Bites, The Batch, Platformer, any Substack. |
 | `paywalled` | **Subscription sites** (NYT, WSJ, The Atlantic). Public feed by default; full text when you supply your own logged-in cookies (see below). |
 | `hackernews` | Front-page-grade stories via the Algolia API, filtered by score. |
-| `reddit` | Top posts from r/MachineLearning, r/LocalLLaMA and friends. |
+| `reddit` | Top posts from r/MachineLearning, r/LocalLLaMA and friends, over Reddit's OAuth API. Needs a free registered app — see *Reddit* below. |
 | `arxiv` | New cs.AI / cs.LG / cs.CL preprints. |
 | `websearch` | **Open-web discovery** using Claude's server-side web search — finds stories none of your feeds carried. |
 
@@ -46,6 +46,7 @@ cp config.example.yaml config.yaml     # edit the source list
 cp env.example .env                    # fill in your secrets
 
 ainews check                           # validate config + credentials
+ainews check --probe                   # ...and actually fetch, to catch dead feeds
 ainews fetch                           # what would be collected right now (no API calls)
 ainews run --dry-run                   # write the digest, don't email it
 ainews run                             # the real thing
@@ -60,7 +61,7 @@ commit. Real values live in `.env` locally and in GitHub Actions secrets in CI.
 |---|---|
 | `ainews run` | The full weekly pipeline. `--dry-run` skips email and state, `--no-llm` makes no API calls (keyword triage instead), `--include-seen` re-includes previously covered stories, `--window-days N` / `--since YYYY-MM-DD` change the window. |
 | `ainews fetch` | List what the sources return right now. No Claude calls. |
-| `ainews check` | Validate config, credentials and every source without fetching. |
+| `ainews check` | Validate config, credentials and every source without fetching. `--probe` also fetches from each source and reports how many items it really returned, flagging dead (`EMPTY`) and frozen (`STALE`) feeds — see *When a feed dies*. |
 | `ainews sources` | List available source types. |
 
 `ainews run --no-llm` makes no API calls at all — see *Running without an Anthropic API key*.
@@ -79,6 +80,46 @@ lane of their own in the digest.
 
 The source reads with `BODY.PEEK` by default, so your unread counts are left
 alone unless you set `mark_seen: true`.
+
+## Reddit
+
+Reddit's `robots.txt` is a blanket `Disallow: /` that covers its pages *and* the
+`.json` views of them, backed by a stated Public Content Policy, so there is no
+anonymous route a well-behaved client can take. The supported route is the OAuth
+API, which is governed by Reddit's API terms instead, and it needs a free app:
+
+1. Go to [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) →
+   *create another app…* → type **script**.
+2. The client id is the string under the app's name; the secret is beside it.
+3. Put them in `.env` as `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` (and as
+   repository secrets for CI).
+
+Leave them unset and the source sits the run out and says so in `ainews check`,
+rather than quietly returning nothing.
+
+## When a feed dies
+
+Feeds rot in two ways, and both are silent: the URL starts 404ing, or it keeps
+answering `200` while frozen. `ainews check` on its own only proves the config
+parses, so `--probe` fetches from every source and reports what actually came
+back:
+
+```
+$ ainews check --probe
+sources (18), probed over 30 days:
+  [      ok] WSJ Tech (paywalled) (37 items, newest 0d old)
+  [   EMPTY] VentureBeat AI (rss) (nothing in 30 days - dead endpoint, moved feed, ...)
+  [ MISSING] Reddit (reddit) (needs: client_id, client_secret)
+  [ skipped] Web search (websearch) (needs model access; not probed)
+```
+
+The probe window (`--probe-days`, default 30) is deliberately wider than the
+digest window: a source with nothing at all in a month is broken, not quiet. The
+weekly workflow runs the probe on every run without ever failing on it, so a
+feed that dies shows up in the job log instead of just thinning the digest.
+
+Probing makes no API calls — model access is switched off for it, so it costs
+nothing and the `websearch` source is reported as skipped rather than billed.
 
 ## Subscription sites (NYT / WSJ / The Atlantic)
 
@@ -105,9 +146,14 @@ personal use.
 ## Scheduling (GitHub Actions)
 
 `.github/workflows/weekly-digest.yml` runs the digest every Monday at 13:00 UTC,
-emails it, uploads it as an artifact and commits the markdown to `digests/`.
-It also has a manual `workflow_dispatch` trigger with `window_days` and
-`dry_run` inputs.
+then delivers it four ways: **an issue on this repository** (needs no secrets —
+this is what notifies you before SMTP is set up), an email if the SMTP secrets
+exist, a build artifact, and a commit of the markdown to `digests/`. It also has
+a manual `workflow_dispatch` trigger with `window_days`, `dry_run` and `no_llm`
+inputs, and runs `ainews check --probe` on every run so a dead feed is visible
+in the log.
+
+`dry_run` skips both the email and the issue.
 
 Add these repository secrets (Settings → Secrets and variables → Actions):
 
@@ -115,6 +161,7 @@ Add these repository secrets (Settings → Secrets and variables → Actions):
 |---|---|
 | `ANTHROPIC_API_KEY` | required with `provider: anthropic`; see *Running without an Anthropic API key* for the alternatives |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASSWORD`, `IMAP_FOLDER` | newsletters |
+| `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | the reddit source; see *Reddit* above |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `DIGEST_FROM`, `DIGEST_TO` | delivery |
 | `NEWS_COOKIES_B64` | optional; `base64 -w0 cookies.txt` for subscription full text |
 
@@ -202,13 +249,15 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 67 tests, no network required
+pytest            # 83 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article
 extraction, every source (with stubbed HTTP), IMAP message parsing, the triage
 cache, cluster-assignment invariants, keyword triage and offline clustering,
-provider selection, payload trimming, rendering and email assembly.
+provider selection, payload trimming, rendering and email assembly — plus the
+robots.txt policy and its documented-API carve-out, and the guarantee that
+`fetch` and `--no-llm` issue no API calls.
 
 ## Layout
 

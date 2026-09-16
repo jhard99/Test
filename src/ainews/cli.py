@@ -13,7 +13,7 @@ from ainews.config import Config, ConfigError, load_dotenv
 from ainews.deliver import DeliveryError, send_email
 from ainews.digest import DigestInput, fallback_digest, plural, week_label, write_digest
 from ainews.http import Fetcher
-from ainews.llm import LLMError, build_client, capabilities
+from ainews.llm import LLMCredentialsError, LLMError, build_client, capabilities
 from ainews.pipeline import cluster, collect, dedupe, drop_seen, select, split_newsletters, triage
 from ainews.render import title_for, to_html, to_markdown
 from ainews.sources import available_types, build_source
@@ -53,6 +53,46 @@ def _context(cfg: Config) -> tuple[Context, Fetcher, Store]:
 # --- commands ----------------------------------------------------------------
 
 
+def _probe_source(
+    source, since: datetime, cfg: Config, ok: bool, args: argparse.Namespace
+) -> tuple[str, str, bool]:
+    """Actually fetch from one source and describe what came back.
+
+    `ainews check` on its own only proves the config parses. That is how a feed
+    can 404 (Anthropic's) or freeze for twenty months (WSJ's old endpoint) while
+    still reporting `[ok]` and contributing nothing. Probing over a window much
+    wider than the digest's tells a genuinely quiet week apart from a dead
+    endpoint: a source with nothing at all in `--probe-days` is broken, not
+    quiet.
+    """
+    try:
+        found = source.fetch(since)
+    except Exception as exc:  # a broken source shouldn't abort the report
+        return "ERROR", f" (fetch failed: {type(exc).__name__}: {exc})", False
+
+    if not found:
+        return (
+            "EMPTY",
+            f" (nothing in {args.probe_days} days - dead endpoint, moved feed, "
+            "or an `include` filter that matches nothing?)",
+            False,
+        )
+
+    newest = max((i.published for i in found if i.published), default=None)
+    if newest is None:
+        return "ok", f" ({len(found)} items, undated)", ok
+
+    age_days = (datetime.now(timezone.utc) - newest).days
+    detail = f" ({len(found)} items, newest {age_days}d old)"
+    if age_days > cfg.window_days:
+        return (
+            "STALE",
+            detail + f" - nothing inside the {cfg.window_days}-day digest window",
+            False,
+        )
+    return "ok", detail, ok
+
+
 def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
     """Validate config and credentials without calling anything expensive."""
     ok = True
@@ -87,12 +127,21 @@ def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
         elif cfg.llm.provider == "foundry":
             print(f"credentials: Foundry resource {cfg.llm.foundry_resource or '(unset!)'}")
 
+    if args.probe:
+        # Probing does real fetches. Keep it free: with model access off, the
+        # websearch source reports itself as skipped instead of billing for
+        # searches, and every other source is plain HTTP.
+        cfg.llm.enabled = False
+
     ctx, fetcher, store = _context(cfg)
+    probe_since = datetime.now(timezone.utc) - timedelta(days=args.probe_days)
     try:
-        print(f"\nsources ({len(cfg.sources)}):")
+        header = f"\nsources ({len(cfg.sources)})"
+        print(f"{header}, probed over {args.probe_days} days:" if args.probe else f"{header}:")
         for source_cfg in cfg.sources:
             status = "disabled" if not source_cfg.enabled else "ok"
             detail = ""
+            source = None
             try:
                 source = build_source(source_cfg, ctx)
                 missing = source.missing_options()
@@ -102,6 +151,12 @@ def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
             except ValueError as exc:
                 status, ok = "ERROR", False
                 detail = f" ({exc})"
+
+            if args.probe and status == "ok" and source is not None:
+                if source_cfg.type == "websearch":
+                    status, detail = "skipped", " (needs model access; not probed)"
+                else:
+                    status, detail, ok = _probe_source(source, probe_since, cfg, ok, args)
             print(f"  [{status:>8}] {source_cfg.name} ({source_cfg.type}){detail}")
 
         if fetcher.authenticated_domains:
@@ -125,6 +180,10 @@ def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
 def cmd_fetch(args: argparse.Namespace, cfg: Config) -> int:
     """Collect items and print them; no LLM calls, no email."""
     since = _since(args, cfg)
+    # This command is documented as making no API calls, and one source (the
+    # websearch one) reaches the API during collection - so model access has to
+    # be switched off before collecting, not just around triage.
+    cfg.llm.enabled = False
     ctx, fetcher, store = _context(cfg)
     try:
         items = dedupe(collect(cfg, ctx, since))
@@ -146,6 +205,10 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
     """The full weekly pipeline."""
     since = _since(args, cfg)
     end = datetime.now(timezone.utc)
+    # Decided before collection: the websearch source calls the API while
+    # collecting, so --no-llm has to reach it too, not only triage and writing.
+    use_llm = cfg.llm.enabled and not args.no_llm
+    cfg.llm.enabled = use_llm
     ctx, fetcher, store = _context(cfg)
 
     try:
@@ -175,14 +238,17 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
         # story lost the merge still counts as having covered the week.
         source_names = sorted({i.source for i in raw})
 
-        use_llm = cfg.llm.enabled and not args.no_llm
         if not use_llm:
             log.info("running without model access: keyword triage and clustering")
             clusters = heuristic.run(stories, cfg)
             log.info("keyword triage kept %d of %d items", sum(len(c.items) for c in clusters), len(stories))
         else:
-            client = build_client(cfg.llm)
-            scored = triage(stories, cfg, ctx, client)
+            try:
+                client = build_client(cfg.llm)
+                scored = triage(stories, cfg, ctx, client)
+            except LLMCredentialsError as exc:
+                log.error("%s", exc)
+                return 1
             kept = select(scored, cfg)
             log.info("triage kept %d of %d items", len(kept), len(scored))
             if not kept and not newsletters:
@@ -300,6 +366,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.set_defaults(func=cmd_fetch)
 
     p_check = sub.add_parser("check", help="validate config, credentials and sources")
+    p_check.add_argument(
+        "--probe",
+        action="store_true",
+        help="actually fetch from every source and report what came back, so a "
+        "dead or frozen feed shows up as EMPTY/STALE instead of ok",
+    )
+    p_check.add_argument(
+        "--probe-days",
+        type=int,
+        default=30,
+        help="window for --probe (default 30). Wider than the digest window on "
+        "purpose: a source with nothing in a month is broken, not quiet.",
+    )
     p_check.set_defaults(func=cmd_check)
 
     p_sources = sub.add_parser("sources", help="list available source types")

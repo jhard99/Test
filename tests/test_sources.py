@@ -39,6 +39,10 @@ class FakeFetcher:
         self.calls.append(url)
         return self.responses.get(url)
 
+    def post(self, url, **kwargs):
+        self.calls.append(url)
+        return self.responses.get(url)
+
     def get_text(self, url):
         resp = self.get(url)
         return resp.text if resp else ""
@@ -180,7 +184,11 @@ def test_hackernews_source_parses_hits_and_sorts_by_points(make_ctx):
     assert items[0].extra["discussion"].endswith("id=2")
 
 
-def test_reddit_source_applies_score_floor(make_ctx):
+REDDIT_CREDS = {"client_id": "id", "client_secret": "secret"}
+
+
+def _reddit_fetcher():
+    """A fetcher that answers the OAuth token POST and the listing GET."""
     payload = {
         "data": {
             "children": [
@@ -191,18 +199,56 @@ def test_reddit_source_applies_score_floor(make_ctx):
             ]
         }
     }
+    return FakeFetcher(
+        {
+            "https://www.reddit.com/api/v1/access_token": FakeResponse(payload={"access_token": "t"}),
+            "https://oauth.reddit.com/r/x/top": FakeResponse(payload=payload),
+        }
+    )
 
-    class SubFetcher(FakeFetcher):
-        def get(self, url, **kwargs):
-            self.calls.append(url)
-            return FakeResponse(payload=payload)
 
-    ctx = make_ctx(SubFetcher())
+def test_reddit_source_applies_score_floor(make_ctx):
+    fetcher = _reddit_fetcher()
+    ctx = make_ctx(fetcher)
     source = build_source(
-        SourceConfig(type="reddit", name="Reddit", options={"subreddits": ["x"], "min_score": 100}), ctx
+        SourceConfig(
+            type="reddit",
+            name="Reddit",
+            options={"subreddits": ["x"], "min_score": 100, **REDDIT_CREDS},
+        ),
+        ctx,
     )
     items = source.fetch(SINCE)
     assert [i.title for i in items] == ["Popular"]
+    # Went through the OAuth API, not the robots-disallowed anonymous route.
+    assert "https://www.reddit.com/api/v1/access_token" in fetcher.calls
+    assert "https://oauth.reddit.com/r/x/top" in fetcher.calls
+    assert not any("top.json" in url for url in fetcher.calls)
+
+
+def test_reddit_source_sits_out_without_credentials(make_ctx):
+    """Reddit disallows anonymous reads, so no credentials must mean no items
+    and a visible `missing_options` - not a silent empty result."""
+    fetcher = _reddit_fetcher()
+    ctx = make_ctx(fetcher)
+    source = build_source(
+        SourceConfig(type="reddit", name="Reddit", options={"subreddits": ["x"]}), ctx
+    )
+    assert source.fetch(SINCE) == []
+    assert source.missing_options() == ["client_id", "client_secret"]
+    assert fetcher.calls == []
+
+
+def test_reddit_source_returns_nothing_if_the_token_is_refused(make_ctx):
+    # Fetcher.post returns None for a 4xx, which is what a bad secret produces.
+    ctx = make_ctx(FakeFetcher({}))
+    source = build_source(
+        SourceConfig(
+            type="reddit", name="Reddit", options={"subreddits": ["x"], **REDDIT_CREDS}
+        ),
+        ctx,
+    )
+    assert source.fetch(SINCE) == []
 
 
 def test_unreachable_source_returns_no_items_instead_of_raising(make_ctx):
