@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local secrets and state - never commit these.
+# config.yaml itself is safe to commit as long as every secret in it is a
+# ${ENV_VAR} reference; keep machine-specific overrides in config.local.yaml.
+.env
+config.local.yaml
+cookies.txt
+*.cookies
+state/
+digests/*.html

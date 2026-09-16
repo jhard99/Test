@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ainews"
+version = "0.1.0"
+description = "Weekly AI news digest agent: pulls RSS, newsletters, HN/Reddit/arXiv, subscription sites and live web search, then writes a digest with Claude."
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.0.0",
+    "feedparser>=6.0.11",
+    "requests>=2.32.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.2.0",
+    "PyYAML>=6.0.1",
+    "Markdown>=3.6",
+    "python-dateutil>=2.9.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+ainews = "ainews.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
