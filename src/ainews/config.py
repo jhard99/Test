@@ -79,6 +79,17 @@ class HttpConfig:
 
 @dataclass
 class LLMConfig:
+    # Where Claude is reached: anthropic (first-party API or an `ant auth login`
+    # profile), bedrock, vertex, foundry. The cloud providers authenticate with
+    # that cloud's own credentials - no Anthropic API key involved.
+    provider: str = "anthropic"
+    # Set false to run with no model access at all: keyword triage instead.
+    enabled: bool = True
+    aws_region: str = "us-east-1"
+    vertex_project: str = ""
+    vertex_region: str = "global"
+    foundry_resource: str = ""
+
     model: str = "claude-opus-5"
     # Triage/clustering run over every candidate item. Point this at a cheaper
     # model (e.g. claude-sonnet-5 or claude-haiku-4-5) to cut cost; the digest

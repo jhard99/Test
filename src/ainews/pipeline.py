@@ -11,7 +11,7 @@ from typing import Any
 import anthropic
 
 from ainews.config import Config
-from ainews.llm import LLMError, json_call
+from ainews.llm import LLMError, json_call, resolve_model
 from ainews.models import Cluster, Item, ScoredItem, normalize_url
 from ainews.sources.base import Context, build_source
 
@@ -220,7 +220,7 @@ def triage(
         try:
             result = json_call(
                 client,
-                model=cfg.llm.triage_model,
+                model=resolve_model(cfg.llm.provider, cfg.llm.triage_model),
                 system=_TRIAGE_SYSTEM,
                 user=json.dumps(payload, ensure_ascii=False),
                 schema=_TRIAGE_SCHEMA,
@@ -281,7 +281,7 @@ def cluster(
     try:
         result = json_call(
             client,
-            model=cfg.llm.triage_model,
+            model=resolve_model(cfg.llm.provider, cfg.llm.triage_model),
             system=_CLUSTER_SYSTEM,
             user=json.dumps(payload, ensure_ascii=False),
             schema=_CLUSTER_SCHEMA,

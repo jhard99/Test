@@ -6,9 +6,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import anthropic
+
+if TYPE_CHECKING:
+    from ainews.config import LLMConfig
 
 log = logging.getLogger(__name__)
 
@@ -17,10 +21,70 @@ class LLMError(RuntimeError):
     """Raised when Claude could not produce a usable answer."""
 
 
-def build_client(timeout: float = 600.0) -> anthropic.Anthropic:
-    """Resolves credentials from ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an
-    `ant auth login` profile."""
-    return anthropic.Anthropic(timeout=timeout, max_retries=3)
+@dataclass(frozen=True)
+class Capabilities:
+    """What a given platform can do, so sources can adapt instead of erroring."""
+
+    web_search: bool
+    web_search_tool_type: str | None = None
+    note: str = ""
+
+
+_CAPABILITIES = {
+    # First-party API: everything.
+    "anthropic": Capabilities(True, "web_search_20260209"),
+    # Bedrock has no server-side web search at all.
+    "bedrock": Capabilities(False, None, "Amazon Bedrock does not offer server-side web search"),
+    # Vertex has the basic variant only (no dynamic filtering).
+    "vertex": Capabilities(True, "web_search_20250305", "Vertex AI supports basic web search only"),
+    # Foundry's server tools are in beta.
+    "foundry": Capabilities(True, "web_search_20250305", "Microsoft Foundry server tools are in beta"),
+}
+
+PROVIDERS = tuple(_CAPABILITIES)
+
+
+def capabilities(provider: str) -> Capabilities:
+    return _CAPABILITIES.get(provider, _CAPABILITIES["anthropic"])
+
+
+def resolve_model(provider: str, model: str) -> str:
+    """Bedrock model ids carry an `anthropic.` prefix; the others do not."""
+    if provider == "bedrock" and not model.startswith("anthropic."):
+        return f"anthropic.{model}"
+    return model
+
+
+def build_client(config: "LLMConfig | None" = None, timeout: float = 600.0):
+    """Build the client for the configured platform.
+
+    Default (`anthropic`) resolves credentials from ANTHROPIC_API_KEY,
+    ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile - so a Claude
+    subscription logged in with the `ant` CLI works with no API key set.
+    The other providers authenticate with that cloud's own credentials.
+    """
+    from ainews.config import LLMConfig
+
+    config = config or LLMConfig()
+    provider = (config.provider or "anthropic").lower()
+    common = {"timeout": timeout, "max_retries": 3}
+
+    if provider == "anthropic":
+        return anthropic.Anthropic(**common)
+    if provider == "bedrock":
+        # AWS credentials come from the usual boto3 chain (env, profile, role).
+        return anthropic.AnthropicBedrockMantle(aws_region=config.aws_region, **common)
+    if provider == "vertex":
+        if not config.vertex_project:
+            raise LLMError("provider 'vertex' needs llm.vertex_project (your GCP project id).")
+        return anthropic.AnthropicVertex(
+            project_id=config.vertex_project, region=config.vertex_region, **common
+        )
+    if provider == "foundry":
+        if not config.foundry_resource:
+            raise LLMError("provider 'foundry' needs llm.foundry_resource.")
+        return anthropic.AnthropicFoundry(resource=config.foundry_resource, **common)
+    raise LLMError(f"Unknown llm.provider {provider!r}. Choose one of: {', '.join(PROVIDERS)}.")
 
 
 def supports_adaptive_thinking(model: str) -> bool:

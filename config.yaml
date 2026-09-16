@@ -14,6 +14,27 @@ output_dir: digests
 state_db: state/ainews.sqlite3
 
 llm:
+  # How Claude is reached:
+  #   anthropic - first-party API. Uses ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+  #               or an `ant auth login` profile (a Claude subscription login,
+  #               no API key needed).
+  #   bedrock   - Amazon Bedrock, using your normal AWS credentials.
+  #               Note: Bedrock has no server-side web search, so the
+  #               `websearch` source below skips itself automatically.
+  #   vertex    - Google Cloud Vertex AI, using GCP application-default creds.
+  #               Set vertex_project. Web search works (basic variant).
+  #   foundry   - Microsoft Foundry. Set foundry_resource.
+  provider: anthropic
+  aws_region: ${AWS_REGION:-us-east-1}
+  vertex_project: ${GCP_PROJECT:-}
+  vertex_region: ${GCP_REGION:-global}
+  foundry_resource: ${FOUNDRY_RESOURCE:-}
+
+  # Set false to run with no model access at all. The digest is then built with
+  # keyword triage and clustering: filtered, ranked and grouped by topic, but
+  # without the written synthesis. Same as passing --no-llm.
+  enabled: true
+
   # The digest writer. Keep this on the strongest model you're willing to pay for.
   model: claude-opus-5
   # Triage + clustering run over every candidate item, so this is where volume

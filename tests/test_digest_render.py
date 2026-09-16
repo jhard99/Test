@@ -63,10 +63,15 @@ def test_build_payload_shrinks_oversized_input(monkeypatch):
     assert "truncated from" in payload["stories"][0]["coverage"][0]["body"]
 
 
-def test_fallback_digest_lists_every_story_with_links():
+def test_fallback_digest_groups_by_topic_and_links_every_story():
     text = fallback_digest(make_input())
-    assert "[Story 0](https://example.com/0)" in text
-    assert "Import AI 400" in text
+    # Highest-importance story is promoted to the summary, all stories appear
+    # under their topic heading, each as a link.
+    assert "## The short version" in text
+    assert "## Models and releases" in text
+    assert "[Story 0 happened](https://example.com/0)" in text
+    assert "[Story 1 happened](https://example.com/1)" in text
+    assert "## From your newsletters" in text and "Import AI 400" in text
     assert "_Coverage: 2 stories from 3 sources._" in text
 
 

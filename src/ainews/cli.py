@@ -8,12 +8,12 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ainews import __version__
+from ainews import __version__, heuristic
 from ainews.config import Config, ConfigError, load_dotenv
 from ainews.deliver import DeliveryError, send_email
 from ainews.digest import DigestInput, fallback_digest, plural, week_label, write_digest
 from ainews.http import Fetcher
-from ainews.llm import LLMError, build_client
+from ainews.llm import LLMError, build_client, capabilities
 from ainews.pipeline import cluster, collect, dedupe, drop_seen, select, split_newsletters, triage
 from ainews.render import title_for, to_html, to_markdown
 from ainews.sources import available_types, build_source
@@ -58,16 +58,34 @@ def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
     ok = True
     print(f"config:      {args.config}")
     print(f"window:      {cfg.window_days} days")
-    print(f"models:      writer={cfg.llm.model}  triage={cfg.llm.triage_model}")
     print(f"state db:    {cfg.state_db}")
     print(f"output dir:  {cfg.output_dir}")
 
     import os
 
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-        print("anthropic:   credentials found in environment")
+    if not cfg.llm.enabled:
+        print("\nmodels:      disabled (llm.enabled: false) - keyword triage, no API calls")
     else:
-        print("anthropic:   no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN (an `ant auth login` profile also works)")
+        print(f"\nmodels:      writer={cfg.llm.model}  triage={cfg.llm.triage_model}")
+        print(f"provider:    {cfg.llm.provider}")
+        caps = capabilities(cfg.llm.provider)
+        if caps.note:
+            print(f"             note: {caps.note}")
+        if cfg.llm.provider == "anthropic":
+            if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+                print("credentials: found in environment")
+            else:
+                print(
+                    "credentials: no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN. An `ant auth login`\n"
+                    "             profile also works; or set llm.provider to bedrock/vertex/foundry,\n"
+                    "             or llm.enabled: false to run with keyword triage."
+                )
+        elif cfg.llm.provider == "bedrock":
+            print(f"credentials: AWS default chain, region {cfg.llm.aws_region}")
+        elif cfg.llm.provider == "vertex":
+            print(f"credentials: GCP ADC, project {cfg.llm.vertex_project or '(unset!)'}, region {cfg.llm.vertex_region}")
+        elif cfg.llm.provider == "foundry":
+            print(f"credentials: Foundry resource {cfg.llm.foundry_resource or '(unset!)'}")
 
     ctx, fetcher, store = _context(cfg)
     try:
@@ -157,20 +175,13 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
         # story lost the merge still counts as having covered the week.
         source_names = sorted({i.source for i in raw})
 
-        if args.no_llm:
-            from ainews.models import Cluster, ScoredItem
-
-            clusters = [
-                Cluster(
-                    headline=i.title,
-                    topic="unclassified",
-                    importance=0,
-                    items=[ScoredItem(item=i, ai_related=True, importance=0, topic="unclassified", one_liner="")],
-                )
-                for i in stories
-            ]
+        use_llm = cfg.llm.enabled and not args.no_llm
+        if not use_llm:
+            log.info("running without model access: keyword triage and clustering")
+            clusters = heuristic.run(stories, cfg)
+            log.info("keyword triage kept %d of %d items", sum(len(c.items) for c in clusters), len(stories))
         else:
-            client = build_client()
+            client = build_client(cfg.llm)
             scored = triage(stories, cfg, ctx, client)
             kept = select(scored, cfg)
             log.info("triage kept %d of %d items", len(kept), len(scored))
@@ -189,7 +200,7 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
             source_names=source_names,
         )
 
-        if args.no_llm:
+        if not use_llm:
             body = fallback_digest(data)
         else:
             try:
@@ -275,7 +286,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="collect, summarize, write and email the digest")
     add_window(p_run)
     p_run.add_argument("--dry-run", action="store_true", help="write files but do not email or record state")
-    p_run.add_argument("--no-llm", action="store_true", help="skip Claude; emit a plain listing")
+    p_run.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="make no API calls; use keyword triage and clustering instead",
+    )
     p_run.add_argument("--include-seen", action="store_true", help="do not skip items from earlier digests")
     p_run.add_argument("--out", type=Path, help="output directory override")
     p_run.set_defaults(func=cmd_run)

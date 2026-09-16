@@ -54,10 +54,12 @@ commit. Real values live in `.env` locally and in GitHub Actions secrets in CI.
 
 | Command | Purpose |
 |---|---|
-| `ainews run` | The full weekly pipeline. `--dry-run` skips email and state, `--no-llm` emits a plain listing with no API calls, `--include-seen` re-includes previously covered stories, `--window-days N` / `--since YYYY-MM-DD` change the window. |
+| `ainews run` | The full weekly pipeline. `--dry-run` skips email and state, `--no-llm` makes no API calls (keyword triage instead), `--include-seen` re-includes previously covered stories, `--window-days N` / `--since YYYY-MM-DD` change the window. |
 | `ainews fetch` | List what the sources return right now. No Claude calls. |
 | `ainews check` | Validate config, credentials and every source without fetching. |
 | `ainews sources` | List available source types. |
+
+`ainews run --no-llm` makes no API calls at all — see *Running without an Anthropic API key*.
 
 ## Connecting your newsletters (IMAP)
 
@@ -107,13 +109,44 @@ Add these repository secrets (Settings → Secrets and variables → Actions):
 
 | Secret | Needed for |
 |---|---|
-| `ANTHROPIC_API_KEY` | required |
+| `ANTHROPIC_API_KEY` | required with `provider: anthropic`; see *Running without an Anthropic API key* for the alternatives |
 | `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASSWORD`, `IMAP_FOLDER` | newsletters |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `DIGEST_FROM`, `DIGEST_TO` | delivery |
 | `NEWS_COOKIES_B64` | optional; `base64 -w0 cookies.txt` for subscription full text |
 
 The "already covered" database is carried between runs with `actions/cache`, so
 a cache eviction costs you one week of possible repeats, nothing worse.
+
+## Running without an Anthropic API key
+
+Three supported routes, set with `llm.provider` in `config.yaml`:
+
+| Situation | Setting | Credentials used |
+|---|---|---|
+| You have a Claude subscription but no API key | `provider: anthropic` | Run `ant auth login` once; the SDK picks up the profile automatically — no `ANTHROPIC_API_KEY` needed |
+| Your org uses AWS | `provider: bedrock` | Your normal AWS credentials (env vars, profile or role) |
+| Your org uses Google Cloud | `provider: vertex` + `vertex_project` | GCP application-default credentials (`gcloud auth application-default login`) |
+| Your org uses Azure | `provider: foundry` + `foundry_resource` | Foundry credentials |
+| No model access at all | `enabled: false` (or `ainews run --no-llm`) | None |
+
+Two platform caveats the code handles for you: **Bedrock has no server-side web
+search**, so the `websearch` source skips itself with a log line instead of
+failing; **Vertex** supports only the basic web-search variant, which is
+selected automatically.
+
+### The zero-API mode
+
+With `llm.enabled: false`, everything except the writing still happens —
+collection, deduplication, cross-week suppression — and triage falls back to
+keyword scoring: an AI-relevance test weighted toward headlines, an importance
+score from event words, multi-outlet coverage, engagement and recency, topic
+classification, and clustering by headline-token overlap. You get a filtered,
+ranked digest grouped into sections with every story linked.
+
+What you lose is the synthesis: no "why this matters", no merging of several
+outlets' reporting into one account, and a cruder relevance call — it will
+occasionally keep something dull or miss a story that never uses an obvious
+keyword. It costs nothing and needs no credentials.
 
 ## Models and cost
 
@@ -146,13 +179,13 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 48 tests, no network required
+pytest            # 67 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article
 extraction, every source (with stubbed HTTP), IMAP message parsing, the triage
-cache, cluster-assignment invariants, payload trimming, rendering and email
-assembly.
+cache, cluster-assignment invariants, keyword triage and offline clustering,
+provider selection, payload trimming, rendering and email assembly.
 
 ## Layout
 
@@ -165,8 +198,9 @@ src/ainews/
   extract.py      HTML -> article text
   store.py        SQLite: seen-items ledger + triage/article cache
   pipeline.py     collect -> dedupe -> triage -> cluster
+  heuristic.py    keyword triage + clustering for runs with no model access
   digest.py       writer prompt, payload assembly, fallback digest
-  llm.py          Anthropic SDK wrapper
+  llm.py          Anthropic SDK wrapper (first-party, Bedrock, Vertex, Foundry)
   render.py       markdown + email HTML
   deliver.py      SMTP
   sources/        rss, paywalled, imap, hackernews, reddit, arxiv, websearch

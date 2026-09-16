@@ -13,7 +13,7 @@ from typing import Any
 import anthropic
 from dateutil import parser as date_parser
 
-from ainews.llm import build_client, supports_adaptive_thinking
+from ainews.llm import build_client, capabilities, resolve_model, supports_adaptive_thinking
 from ainews.models import Item
 from ainews.sources.base import Source, register
 
@@ -56,14 +56,28 @@ class WebSearchSource(Source):
     type_name = "websearch"
 
     def fetch(self, since: datetime) -> list[Item]:
+        llm_cfg = self.ctx.config.llm
+        if not llm_cfg.enabled:
+            log.info("%s: skipped, this source needs model access (llm.enabled is false)", self.name)
+            return []
+
+        caps = capabilities(llm_cfg.provider)
+        if not caps.web_search:
+            log.warning("%s: skipped - %s", self.name, caps.note)
+            return []
+        if caps.note:
+            log.info("%s: %s", self.name, caps.note)
+
         queries = self.options.get("queries") or _DEFAULT_QUERIES
-        model = str(self.options.get("model") or self.ctx.config.llm.triage_model)
+        model = resolve_model(
+            llm_cfg.provider, str(self.options.get("model") or llm_cfg.triage_model)
+        )
         max_uses = int(self.options.get("max_uses", 4))
         allowed = self.options.get("allowed_domains") or []
         blocked = self.options.get("blocked_domains") or []
 
         tool: dict[str, Any] = {
-            "type": "web_search_20260209",
+            "type": caps.web_search_tool_type,
             "name": "web_search",
             "max_uses": max_uses,
         }
@@ -73,7 +87,7 @@ class WebSearchSource(Source):
         elif blocked:
             tool["blocked_domains"] = blocked
 
-        client = build_client()
+        client = build_client(llm_cfg)
         window = f"{since.date().isoformat()} to {datetime.now(timezone.utc).date().isoformat()}"
         items: dict[str, Item] = {}
 

@@ -68,7 +68,16 @@ jobs:
 
       - name: Generate and send digest
         env:
+          # Only needed with llm.provider: anthropic. For Bedrock, drop this and
+          # add AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION secrets (or
+          # configure OIDC with aws-actions/configure-aws-credentials); for Vertex,
+          # authenticate with google-github-actions/auth and set GCP_PROJECT.
+          # With llm.enabled: false, no model credentials are needed at all.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
           IMAP_HOST: ${{ secrets.IMAP_HOST }}
           IMAP_PORT: ${{ secrets.IMAP_PORT }}
           IMAP_USER: ${{ secrets.IMAP_USER }}

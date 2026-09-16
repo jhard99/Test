@@ -11,7 +11,7 @@ from typing import Any
 import anthropic
 
 from ainews.config import Config
-from ainews.llm import text_call
+from ainews.llm import resolve_model, text_call
 from ainews.models import Cluster, Item
 
 log = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ def write_digest(
     )
     return text_call(
         client,
-        model=cfg.llm.model,
+        model=resolve_model(cfg.llm.provider, cfg.llm.model),
         system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
         user=user,
         effort=cfg.llm.writer_effort,
@@ -161,23 +161,69 @@ def write_digest(
     )
 
 
+#: Section order for the offline digest, most consequential first.
+_TOPIC_ORDER = [
+    ("models-and-releases", "Models and releases"),
+    ("policy-and-regulation", "Policy and regulation"),
+    ("business-and-funding", "Business and funding"),
+    ("safety-and-alignment", "Safety and alignment"),
+    ("compute-and-infrastructure", "Compute and infrastructure"),
+    ("research", "Research"),
+    ("products-and-tools", "Products and tools"),
+    ("society-and-labor", "Society and labour"),
+    ("other", "Everything else"),
+    ("unclassified", "Collected stories"),
+]
+
+
+def _story_line(cluster: Cluster) -> list[str]:
+    lead = cluster.items[0].item
+    link = f"[{cluster.headline}]({lead.url})" if lead.url else cluster.headline
+    sources = ", ".join(cluster.sources[:3])
+    lines = [f"- **{link}** — {sources}"]
+    if cluster.items[0].one_liner:
+        lines.append(f"  {cluster.items[0].one_liner}")
+    for extra in cluster.items[1:3]:
+        if extra.item.url:
+            lines.append(f"  - also: [{extra.item.source}]({extra.item.url})")
+    return lines
+
+
 def fallback_digest(data: DigestInput) -> str:
-    """A plain listing, used with --no-llm or when the writer call fails, so a
+    """A digest assembled without any model call: grouped by topic, ranked by
+    the heuristic score. Used by --no-llm and whenever a Claude call fails, so a
     run always produces something readable."""
-    lines = ["## Collected stories", ""]
-    for cluster in data.clusters:
-        lines.append(f"### {cluster.headline}")
-        lines.append(f"_{cluster.topic} · importance {cluster.importance}_")
-        for scored in cluster.items:
-            item = scored.item
-            when = item.published.date().isoformat() if item.published else "undated"
-            link = f"[{item.title}]({item.url})" if item.url else item.title
-            lines.append(f"- {link} — {item.source}, {when}")
-            if scored.one_liner:
-                lines.append(f"  - {scored.one_liner}")
+    lines: list[str] = []
+
+    headline_stories = [c for c in data.clusters if c.importance >= 4][:6]
+    if headline_stories:
+        lines += ["## The short version", ""]
+        for cluster in headline_stories:
+            lead = cluster.items[0].item
+            link = f"[{cluster.headline}]({lead.url})" if lead.url else cluster.headline
+            lines.append(f"- {link} ({', '.join(cluster.sources[:2])})")
         lines.append("")
+
+    by_topic: dict[str, list[Cluster]] = {}
+    for cluster in data.clusters:
+        by_topic.setdefault(cluster.topic, []).append(cluster)
+
+    for topic, heading in _TOPIC_ORDER:
+        group = by_topic.pop(topic, [])
+        if not group:
+            continue
+        lines += [f"## {heading}", ""]
+        for cluster in group:
+            lines += _story_line(cluster)
+        lines.append("")
+    for topic, group in by_topic.items():  # any topic not in the fixed order
+        lines += [f"## {topic}", ""]
+        for cluster in group:
+            lines += _story_line(cluster)
+        lines.append("")
+
     if data.newsletters:
-        lines += ["## Newsletters received", ""]
+        lines += ["## From your newsletters", ""]
         for item in data.newsletters:
             when = item.published.date().isoformat() if item.published else "undated"
             lines.append(f"- **{item.title}** — {item.source}, {when}")
