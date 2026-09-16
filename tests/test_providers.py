@@ -71,3 +71,71 @@ def test_config_parses_provider_settings():
     assert cfg.llm.provider == "bedrock"
     assert cfg.llm.enabled is False
     assert cfg.llm.aws_region == "eu-west-1"
+
+
+def test_missing_credentials_are_detected_before_any_request(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # no `ant` profile here
+    from ainews.llm import credentials_available
+
+    assert credentials_available(LLMConfig()) is False
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    assert credentials_available(LLMConfig()) is True
+
+
+def test_an_ant_auth_login_profile_counts_as_credentials(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    profile = tmp_path / "anthropic"
+    profile.mkdir()
+    (profile / "credentials.json").write_text("{}")
+    from ainews.llm import credentials_available
+
+    assert credentials_available(LLMConfig()) is True
+
+
+def test_cloud_providers_defer_to_their_own_credential_chains(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from ainews.llm import credentials_available
+
+    assert credentials_available(LLMConfig(provider="bedrock")) is True
+
+
+def test_sdk_auth_typeerror_becomes_credentials_missing():
+    """Reproduces the CI failure: the SDK raises a bare TypeError when no
+    credential source resolves, which used to crash the whole run."""
+    from ainews.llm import CredentialsMissing, json_call
+
+    class NoCredsClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise TypeError(
+                    "Could not resolve authentication method. Expected one of api_key, "
+                    "auth_token, or credentials to be set."
+                )
+
+    with pytest.raises(CredentialsMissing):
+        json_call(
+            NoCredsClient(), model="claude-opus-5", system="s", user="u",
+            schema={"type": "object"}, label="triage",
+        )
+
+
+def test_unrelated_typeerror_is_not_swallowed():
+    from ainews.llm import json_call
+
+    class BrokenClient:
+        class messages:
+            @staticmethod
+            def create(**kwargs):
+                raise TypeError("create() got an unexpected keyword argument 'nonsense'")
+
+    with pytest.raises(TypeError, match="nonsense"):
+        json_call(
+            BrokenClient(), model="claude-opus-5", system="s", user="u",
+            schema={"type": "object"},
+        )
