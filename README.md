@@ -134,6 +134,25 @@ search**, so the `websearch` source skips itself with a log line instead of
 failing; **Vertex** supports only the basic web-search variant, which is
 selected automatically.
 
+### "Your organization is blocking new organization creation for domain …"
+
+That error comes from Anthropic *signup*, not from the network: your employer or
+university has claimed the email domain and disabled self-serve account
+creation. Nothing is blocking this tool from reaching Claude. In rough order of
+effort:
+
+1. `ant auth login` — if you have any Claude subscription that works in Claude
+   Code, the agent uses it with no API key. One command; `ainews check` will
+   tell you whether it took.
+2. Ask whoever administers your organization's Anthropic account for API access
+   — that error usually means one already exists.
+3. Sign up with a personal address for personal use (this tool reads public news
+   and your own inbox; check your own policy if that changes).
+4. Ask whether Claude is enabled in an AWS or GCP account you can use, and set
+   `provider: bedrock` / `provider: vertex` — this bills through existing cloud
+   spend, which is often easier to get approved than a new vendor account.
+5. Run `llm.enabled: false` until one of the above lands.
+
 ### The zero-API mode
 
 With `llm.enabled: false`, everything except the writing still happens —
