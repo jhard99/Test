@@ -1,0 +1,202 @@
+# ainews configuration.
+#
+# Copy to config.yaml and edit. Secrets never belong in here - write ${ENV_VAR}
+# and keep the value in .env locally or in GitHub Actions secrets in CI.
+# ${VAR:-default} works too.
+
+window_days: 7            # how far back each run looks
+max_items_per_source: 80  # cap per source, before filtering
+max_stories: 12           # top stories in the digest
+per_item_chars: 8000      # article text handed to the writer per item
+min_importance: 2         # 1..5; drop anything triaged below this
+
+output_dir: digests
+state_db: state/ainews.sqlite3
+
+llm:
+  # How Claude is reached:
+  #   anthropic - first-party API. Uses ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+  #               or an `ant auth login` profile (a Claude subscription login,
+  #               no API key needed).
+  #   bedrock   - Amazon Bedrock, using your normal AWS credentials.
+  #               Note: Bedrock has no server-side web search, so the
+  #               `websearch` source below skips itself automatically.
+  #   vertex    - Google Cloud Vertex AI, using GCP application-default creds.
+  #               Set vertex_project. Web search works (basic variant).
+  #   foundry   - Microsoft Foundry. Set foundry_resource.
+  provider: anthropic
+  aws_region: ${AWS_REGION:-us-east-1}
+  vertex_project: ${GCP_PROJECT:-}
+  vertex_region: ${GCP_REGION:-global}
+  foundry_resource: ${FOUNDRY_RESOURCE:-}
+
+  # Set false to run with no model access at all. The digest is then built with
+  # keyword triage and clustering: filtered, ranked and grouped by topic, but
+  # without the written synthesis. Same as passing --no-llm.
+  enabled: true
+
+  # The digest writer. Keep this on the strongest model you're willing to pay for.
+  model: claude-opus-5
+  # Triage + clustering run over every candidate item, so this is where volume
+  # lives. Switch to claude-sonnet-5 or claude-haiku-4-5 to cut the bill.
+  triage_model: claude-opus-5
+  triage_effort: low
+  writer_effort: high
+  triage_batch_size: 40
+  max_output_tokens: 32000
+
+http:
+  user_agent: "ainews-digest/0.1 (personal weekly AI digest)"
+  requests_per_minute: 20   # per host
+  respect_robots: true
+  timeout: 30
+  # Domains allowed to receive cookies from NEWS_COOKIES_FILE. Cookies for any
+  # other domain in that file are discarded at load time.
+  cookie_domains:
+    - nytimes.com
+    - wsj.com
+    - theatlantic.com
+
+delivery:
+  smtp:
+    host: ${SMTP_HOST:-smtp.gmail.com}
+    port: ${SMTP_PORT:-587}
+    username: ${SMTP_USER}
+    password: ${SMTP_PASSWORD}
+    sender: ${DIGEST_FROM}
+    recipients:
+      - ${DIGEST_TO}
+    use_tls: true
+    subject_template: "AI weekly - {start} to {end}"
+
+sources:
+  # --- your newsletter subscriptions, read from your inbox -------------------
+  - type: imap
+    name: newsletters
+    host: ${IMAP_HOST:-imap.gmail.com}
+    port: ${IMAP_PORT:-993}
+    username: ${IMAP_USER}
+    password: ${IMAP_PASSWORD}
+    folder: ${IMAP_FOLDER:-INBOX}
+    max_items: 25
+    # Optional narrowing. Drop `senders` to take everything in the folder -
+    # best paired with a Gmail filter that labels newsletters into their own
+    # folder, e.g. folder: "AI News".
+    senders:
+      - importai
+      - tldr
+      - bensbites
+      - deeplearning.ai
+      - platformer
+      - stratechery
+      - theneurondaily
+      - substack.com
+    # subject_include: ["AI", "LLM", "model"]
+    unread_only: false
+    mark_seen: false
+
+  # --- subscription news sites ----------------------------------------------
+  # Public feeds give headline + abstract. Full article text is read only when
+  # NEWS_COOKIES_FILE holds your own logged-in cookies for the domain.
+  - type: paywalled
+    name: NYT Technology
+    domain: nytimes.com
+    url: https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml
+    full_text: true
+    include: ["ai", "artificial intelligence", "openai", "anthropic", "chatbot", "algorithm", "chip", "data center"]
+
+  - type: paywalled
+    name: NYT Business
+    domain: nytimes.com
+    url: https://rss.nytimes.com/services/xml/rss/nyt/Business.xml
+    full_text: true
+    include: ["ai", "artificial intelligence", "openai", "anthropic", "nvidia", "chip"]
+
+  - type: paywalled
+    name: WSJ Tech
+    domain: wsj.com
+    url: https://feeds.a.dj.com/rss/RSSWSJD.xml
+    full_text: true
+
+  - type: paywalled
+    name: The Atlantic - Technology
+    domain: theatlantic.com
+    url: https://www.theatlantic.com/feed/channel/technology/
+    full_text: true
+
+  # --- AI trade press --------------------------------------------------------
+  - type: rss
+    name: Ars Technica AI
+    url: https://arstechnica.com/ai/feed/
+    full_text: true
+
+  - type: rss
+    name: MIT Technology Review - AI
+    url: https://www.technologyreview.com/topic/artificial-intelligence/feed
+
+  - type: rss
+    name: The Verge - AI
+    url: https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
+
+  - type: rss
+    name: TechCrunch AI
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+
+  - type: rss
+    name: VentureBeat AI
+    url: https://venturebeat.com/category/ai/feed/
+
+  # --- labs and primary sources ---------------------------------------------
+  - type: rss
+    name: Anthropic News
+    url: https://www.anthropic.com/rss.xml
+    full_text: true
+
+  - type: rss
+    name: OpenAI Blog
+    url: https://openai.com/blog/rss.xml
+    full_text: true
+
+  - type: rss
+    name: Google DeepMind
+    url: https://deepmind.google/blog/rss.xml
+
+  - type: rss
+    name: Hugging Face Blog
+    url: https://huggingface.co/blog/feed.xml
+
+  - type: rss
+    name: Simon Willison
+    url: https://simonwillison.net/atom/everything/
+
+  # --- forums ----------------------------------------------------------------
+  - type: hackernews
+    name: Hacker News
+    min_points: 100
+    max_items: 40
+
+  - type: reddit
+    name: Reddit
+    subreddits: [MachineLearning, LocalLLaMA, artificial]
+    timeframe: week
+    min_score: 200
+    max_items: 30
+
+  # --- research ---------------------------------------------------------------
+  - type: arxiv
+    name: arXiv
+    categories: [cs.AI, cs.LG, cs.CL]
+    max_items: 40
+
+  # --- open web (Claude's server-side web search) -----------------------------
+  # Finds stories none of the feeds above carried. Costs a few API calls.
+  - type: websearch
+    name: Web search
+    max_uses: 4
+    max_items: 40
+    queries:
+      - "major AI news this week"
+      - "new AI model release this week"
+      - "AI regulation news this week"
+      - "AI funding round this week"
+      - "AI safety research news this week"
