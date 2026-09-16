@@ -32,6 +32,10 @@ sources ──► dedupe ──► triage (Claude) ──► cluster (Claude) �
 `ainews sources` lists the registered types. Adding a new one is a subclass of
 `Source` plus a `@register` decorator in `src/ainews/sources/`.
 
+**Don't want to use a terminal?** [SETUP-NO-TERMINAL.md](SETUP-NO-TERMINAL.md)
+sets the whole thing up in the browser: GitHub runs it weekly on its own
+machines and emails you the digest, with nothing installed locally.
+
 ## Quick start
 
 ```bash
