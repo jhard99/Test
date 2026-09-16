@@ -13,7 +13,13 @@ from ainews.config import Config, ConfigError, load_dotenv
 from ainews.deliver import DeliveryError, send_email
 from ainews.digest import DigestInput, fallback_digest, plural, week_label, write_digest
 from ainews.http import Fetcher
-from ainews.llm import LLMError, build_client, capabilities
+from ainews.llm import (
+    CredentialsMissing,
+    LLMError,
+    build_client,
+    capabilities,
+    credentials_available,
+)
 from ainews.pipeline import cluster, collect, dedupe, drop_seen, select, split_newsletters, triage
 from ainews.render import title_for, to_html, to_markdown
 from ainews.sources import available_types, build_source
@@ -176,20 +182,43 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
         source_names = sorted({i.source for i in raw})
 
         use_llm = cfg.llm.enabled and not args.no_llm
+        notice = ""
+        if use_llm and not credentials_available(cfg.llm):
+            # A scheduled digest that arrives keyword-ranked beats no digest,
+            # but it must not look like a normal edition - hence the notice.
+            log.warning(
+                "no credentials for provider %r - falling back to keyword triage. "
+                "Set ANTHROPIC_API_KEY, run `ant auth login`, or set llm.provider "
+                "to a cloud you can reach.",
+                cfg.llm.provider,
+            )
+            use_llm = False
+            notice = "no Claude credentials were found"
+
+        if use_llm:
+            try:
+                client = build_client(cfg.llm)
+                scored = triage(stories, cfg, ctx, client)
+                kept = select(scored, cfg)
+                log.info("triage kept %d of %d items", len(kept), len(scored))
+                if not kept and not newsletters:
+                    log.error("nothing cleared the relevance bar this week")
+                    return 1
+                clusters = cluster(kept, cfg, ctx, client)
+                log.info("grouped into %d stories", len(clusters))
+            except CredentialsMissing as exc:
+                log.warning("%s - falling back to keyword triage", exc)
+                use_llm = False
+                notice = "the configured Claude credentials were rejected"
+
         if not use_llm:
             log.info("running without model access: keyword triage and clustering")
             clusters = heuristic.run(stories, cfg)
-            log.info("keyword triage kept %d of %d items", sum(len(c.items) for c in clusters), len(stories))
-        else:
-            client = build_client(cfg.llm)
-            scored = triage(stories, cfg, ctx, client)
-            kept = select(scored, cfg)
-            log.info("triage kept %d of %d items", len(kept), len(scored))
-            if not kept and not newsletters:
-                log.error("nothing cleared the relevance bar this week")
-                return 1
-            clusters = cluster(kept, cfg, ctx, client)
-            log.info("grouped into %d stories", len(clusters))
+            log.info(
+                "keyword triage kept %d of %d items",
+                sum(len(c.items) for c in clusters),
+                len(stories),
+            )
 
         data = DigestInput(
             clusters=clusters[: max(cfg.max_stories * 3, cfg.max_stories)],
@@ -202,6 +231,12 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
 
         if not use_llm:
             body = fallback_digest(data)
+            if notice:
+                body = (
+                    f"> **Assembled without Claude:** {notice}, so this edition was ranked "
+                    "and grouped by keyword rather than written. The stories and links are "
+                    "real; the summaries and the 'why it matters' are missing.\n\n"
+                ) + body
         else:
             try:
                 body = write_digest(data, cfg, client)

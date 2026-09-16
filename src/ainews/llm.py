@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anthropic
@@ -19,6 +21,34 @@ log = logging.getLogger(__name__)
 
 class LLMError(RuntimeError):
     """Raised when Claude could not produce a usable answer."""
+
+
+class CredentialsMissing(LLMError):
+    """No usable credentials for the configured provider.
+
+    Separate from LLMError because callers treat it differently: a failed
+    request is worth retrying or reporting, but missing credentials mean the
+    whole model path is unavailable and the run should degrade, not die.
+    """
+
+
+def credentials_available(config: "LLMConfig | None" = None) -> bool:
+    """Best-effort check for credentials, before any request is made.
+
+    For the cloud providers we return True and let their own credential chains
+    speak for themselves at call time - second-guessing boto3 or ADC here would
+    produce worse errors than they do.
+    """
+    from ainews.config import LLMConfig
+
+    config = config or LLMConfig()
+    if (config.provider or "anthropic").lower() != "anthropic":
+        return True
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return True
+    # An `ant auth login` profile, which the SDK picks up with no env var set.
+    profile_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "anthropic"
+    return profile_dir.is_dir() and any(profile_dir.iterdir())
 
 
 @dataclass(frozen=True)
@@ -142,6 +172,13 @@ def json_call(
 
     try:
         response = client.messages.create(**kwargs)
+    except anthropic.AuthenticationError as exc:
+        raise CredentialsMissing(f"{label}: credentials were rejected: {exc}") from exc
+    except TypeError as exc:
+        # The SDK raises a bare TypeError when no credential source resolves.
+        if "authentication" in str(exc).lower():
+            raise CredentialsMissing(f"{label}: {exc}") from exc
+        raise
     except anthropic.APIStatusError as exc:
         raise LLMError(f"{label}: API error {exc.status_code}: {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
@@ -183,6 +220,12 @@ def text_call(
     try:
         with client.messages.stream(**kwargs) as stream:
             response = stream.get_final_message()
+    except anthropic.AuthenticationError as exc:
+        raise CredentialsMissing(f"{label}: credentials were rejected: {exc}") from exc
+    except TypeError as exc:
+        if "authentication" in str(exc).lower():
+            raise CredentialsMissing(f"{label}: {exc}") from exc
+        raise
     except anthropic.APIStatusError as exc:
         raise LLMError(f"{label}: API error {exc.status_code}: {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
