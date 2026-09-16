@@ -11,7 +11,7 @@ from typing import Any
 import anthropic
 
 from ainews.config import Config
-from ainews.llm import LLMError, json_call, resolve_model
+from ainews.llm import LLMCredentialsError, LLMError, json_call, resolve_model
 from ainews.models import Cluster, Item, ScoredItem, normalize_url
 from ainews.sources.base import Context, build_source
 
@@ -227,6 +227,10 @@ def triage(
                 effort=cfg.llm.triage_effort,
                 label=f"triage[{start // batch_size + 1}]",
             )
+        except LLMCredentialsError:
+            # Not a per-batch hiccup: every remaining batch would fail the same
+            # way, so surface it once instead of logging it per batch.
+            raise
         except LLMError as exc:
             log.error("%s - keeping this batch unscored", exc)
             continue

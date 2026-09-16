@@ -14,7 +14,10 @@ from ainews.sources.rss import entry_datetime
 
 log = logging.getLogger(__name__)
 
-_API = "http://export.arxiv.org/api/query"
+# HTTPS, and one of the endpoints in http.SANCTIONED_APIS: export.arxiv.org
+# serves a blanket `Disallow: /` robots.txt aimed at page crawlers, while the
+# arXiv API Terms of Use invite API clients at one request every three seconds.
+_API = "https://export.arxiv.org/api/query"
 _DEFAULT_CATEGORIES = ["cs.AI", "cs.LG", "cs.CL"]
 
 

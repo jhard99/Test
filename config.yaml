@@ -115,7 +115,10 @@ sources:
   - type: paywalled
     name: WSJ Tech
     domain: wsj.com
-    url: https://feeds.a.dj.com/rss/RSSWSJD.xml
+    # Dow Jones' current feed host. The older feeds.a.dj.com/rss/RSSWSJD.xml
+    # endpoint still answers 200 but has been frozen since January 2025, so it
+    # contributed nothing to a 7-day window.
+    url: https://feeds.content.dowjones.io/public/rss/RSSWSJD
     full_text: true
 
   - type: paywalled
@@ -144,13 +147,16 @@ sources:
 
   - type: rss
     name: VentureBeat AI
+    # VentureBeat rate-limits hard: this often answers 429 from residential and
+    # cloud IPs alike, in which case the source logs a warning and contributes
+    # nothing that week. Kept because it does answer from some networks.
     url: https://venturebeat.com/category/ai/feed/
 
   # --- labs and primary sources ---------------------------------------------
-  - type: rss
-    name: Anthropic News
-    url: https://www.anthropic.com/rss.xml
-    full_text: true
+  # Anthropic publishes no RSS feed - /rss.xml, /index.xml, /feed.xml and
+  # /news/rss.xml all return 404 - so there is no primary feed to subscribe to
+  # here. Anthropic news reaches the digest through the trade press above, HN
+  # (which carries anthropic.com links) and the websearch source below.
 
   - type: rss
     name: OpenAI Blog
@@ -177,6 +183,12 @@ sources:
 
   - type: reddit
     name: Reddit
+    # Reddit's robots.txt disallows anonymous reads of both its pages and their
+    # .json views, so this source needs a registered app. Create one (type
+    # "script") at https://www.reddit.com/prefs/apps and set REDDIT_CLIENT_ID /
+    # REDDIT_CLIENT_SECRET. Leave them unset and the source sits out the run.
+    client_id: ${REDDIT_CLIENT_ID}
+    client_secret: ${REDDIT_CLIENT_SECRET}
     subreddits: [MachineLearning, LocalLLaMA, artificial]
     timeframe: week
     min_score: 200

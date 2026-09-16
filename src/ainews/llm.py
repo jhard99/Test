@@ -21,6 +21,28 @@ class LLMError(RuntimeError):
     """Raised when Claude could not produce a usable answer."""
 
 
+class LLMCredentialsError(LLMError):
+    """Raised when no usable credentials could be resolved for the provider."""
+
+
+CREDENTIALS_HINT = (
+    "no usable credentials. Set ANTHROPIC_API_KEY, or run `ant auth login` to use a "
+    "Claude subscription, or set llm.enabled: false (equivalently pass --no-llm) to "
+    "run with keyword triage and no API calls."
+)
+
+
+def is_credentials_error(exc: BaseException) -> bool:
+    """True for the SDK's "could not resolve authentication" failure.
+
+    The SDK raises a bare `TypeError` from header validation when no auth method
+    resolves, and it does so at request time rather than at construction - so
+    there is nothing to catch when the client is built, and the type alone is
+    too broad to catch safely. Match on the message instead.
+    """
+    return isinstance(exc, TypeError) and "authentication method" in str(exc)
+
+
 @dataclass(frozen=True)
 class Capabilities:
     """What a given platform can do, so sources can adapt instead of erroring."""
@@ -146,6 +168,10 @@ def json_call(
         raise LLMError(f"{label}: API error {exc.status_code}: {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
         raise LLMError(f"{label}: could not reach the Claude API: {exc}") from exc
+    except TypeError as exc:
+        if is_credentials_error(exc):
+            raise LLMCredentialsError(f"{label}: {CREDENTIALS_HINT}") from exc
+        raise
 
     _check_stop(response, label)
     text = _first_text(response)
@@ -187,6 +213,10 @@ def text_call(
         raise LLMError(f"{label}: API error {exc.status_code}: {exc.message}") from exc
     except anthropic.APIConnectionError as exc:
         raise LLMError(f"{label}: could not reach the Claude API: {exc}") from exc
+    except TypeError as exc:
+        if is_credentials_error(exc):
+            raise LLMCredentialsError(f"{label}: {CREDENTIALS_HINT}") from exc
+        raise
 
     _check_stop(response, label)
     usage = response.usage

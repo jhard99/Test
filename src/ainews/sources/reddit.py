@@ -1,4 +1,19 @@
-"""Subreddit top posts via Reddit's public JSON endpoints."""
+"""Subreddit top posts via Reddit's OAuth API.
+
+Reddit's robots.txt is a blanket `Disallow: /` that covers both its HTML pages
+and the `.json` views of them, backed by a stated Public Content Policy. So the
+anonymous `reddit.com/r/<sub>/top.json` route this source used to take is not
+available to a well-behaved client, and it returned nothing at all.
+
+The supported route for programmatic reads is the OAuth API, governed by
+Reddit's API terms rather than robots.txt. It needs a (free) registered app:
+
+    https://www.reddit.com/prefs/apps  ->  "create another app..."  ->  script
+
+Put the client id and secret in REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET. With
+them unset this source reports itself as missing credentials in `ainews check`
+and contributes nothing, rather than silently looking healthy.
+"""
 
 from __future__ import annotations
 
@@ -11,32 +26,79 @@ from ainews.sources.base import Source, register
 log = logging.getLogger(__name__)
 
 _DEFAULT_SUBS = ["MachineLearning", "LocalLLaMA", "artificial", "singularity"]
+_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_API_ROOT = "https://oauth.reddit.com"
 
 
 @register
 class RedditSource(Source):
     """Options:
-        subreddits: list of subreddit names (no /r/ prefix)
-        timeframe:  hour|day|week|month (default week)
-        min_score:  minimum upvotes, default 50
+        client_id:     Reddit app client id (required)
+        client_secret: Reddit app secret (required)
+        subreddits:    list of subreddit names (no /r/ prefix)
+        timeframe:     hour|day|week|month (default week)
+        min_score:     minimum upvotes, default 50
     """
 
     type_name = "reddit"
+    required_options = ("client_id", "client_secret")
+
+    def _token(self) -> str | None:
+        """Exchange the app credentials for an app-only bearer token."""
+        resp = self.ctx.fetcher.post(
+            _TOKEN_URL,
+            auth=(str(self.options["client_id"]), str(self.options["client_secret"])),
+            data={"grant_type": "client_credentials"},
+        )
+        if resp is None:
+            log.warning(
+                "%s: could not get a Reddit access token - check REDDIT_CLIENT_ID / "
+                "REDDIT_CLIENT_SECRET (an app of type 'script' works)",
+                self.name,
+            )
+            return None
+        try:
+            token = resp.json().get("access_token")
+        except ValueError:
+            log.warning("%s: Reddit returned a non-JSON token response", self.name)
+            return None
+        if not token:
+            log.warning("%s: Reddit token response carried no access_token", self.name)
+        return token
 
     def fetch(self, since: datetime) -> list[Item]:
+        missing = self.missing_options()
+        if missing:
+            log.info(
+                "%s: skipping, missing options: %s. Reddit's robots.txt disallows "
+                "anonymous access, so this source needs a registered app "
+                "(https://www.reddit.com/prefs/apps).",
+                self.name,
+                ", ".join(missing),
+            )
+            return []
+
+        token = self._token()
+        if not token:
+            return []
+
         subs = self.options.get("subreddits") or _DEFAULT_SUBS
         timeframe = str(self.options.get("timeframe", "week"))
         min_score = int(self.options.get("min_score", 50))
+        headers = {"Authorization": f"bearer {token}"}
 
         items: list[Item] = []
         for sub in subs:
             if len(items) >= self.limit:
                 break
-            url = f"https://www.reddit.com/r/{sub}/top.json"
-            resp = self.ctx.fetcher.get(url, params={"t": timeframe, "limit": "100"})
+            resp = self.ctx.fetcher.get(
+                f"{_API_ROOT}/r/{sub}/top",
+                params={"t": timeframe, "limit": "100"},
+                headers=headers,
+            )
             if resp is None:
-                # Reddit blocks generic clients aggressively; don't fail the run.
-                log.info("%s: r/%s unavailable (rate limited or blocked)", self.name, sub)
+                # A private, banned or renamed subreddit shouldn't fail the run.
+                log.info("%s: r/%s unavailable", self.name, sub)
                 continue
             try:
                 children = resp.json().get("data", {}).get("children", [])
