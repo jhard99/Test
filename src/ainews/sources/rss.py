@@ -110,7 +110,13 @@ class RSSSource(Source):
         cache_key = f"article:{item.key}"
         cached = self.ctx.store.get_cache(cache_key)
         if cached is not None:
-            return str(cached)
+            # Re-check the cached text: a stub gets cached like any other body,
+            # so without this an item fetched while the cookies were expired
+            # would look like a complete article on every later run.
+            text = str(cached)
+            if looks_paywalled(text):
+                item.extra["paywalled"] = True
+            return text
 
         html = self.ctx.fetcher.get_text(item.url)
         if not html:
