@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anthropic
@@ -30,6 +32,56 @@ CREDENTIALS_HINT = (
     "Claude subscription, or set llm.enabled: false (equivalently pass --no-llm) to "
     "run with keyword triage and no API calls."
 )
+
+
+def profile_credentials(profile: str | None = None) -> Path | None:
+    """Path to the `ant auth login` credentials file for a profile, if it exists.
+
+    A Claude subscription logged in with `ant auth login` needs no API key - the
+    SDK finds the profile on disk by itself. Locating it matters for reporting:
+    profiles are only consulted when no API key is set, so `ainews check` has to
+    be able to say which source will actually win.
+    """
+    config_dir = os.environ.get("ANTHROPIC_CONFIG_DIR")
+    if not config_dir:
+        appdata = os.environ.get("APPDATA")  # Windows
+        config_dir = (
+            str(Path(appdata) / "Anthropic") if appdata else os.path.expanduser("~/.config/anthropic")
+        )
+    name = profile or os.environ.get("ANTHROPIC_PROFILE") or "default"
+    path = Path(config_dir) / "credentials" / f"{name}.json"
+    return path if path.is_file() else None
+
+
+def credentials_source() -> tuple[str, str]:
+    """Which credential the SDK will use for the first-party API, and a note.
+
+    Mirrors the SDK's own precedence: ANTHROPIC_API_KEY, then
+    ANTHROPIC_AUTH_TOKEN, then the active `ant auth login` profile. Membership
+    is what counts, not truthiness - an empty ANTHROPIC_API_KEY still claims its
+    slot and authenticates with an empty key, which is the single most common
+    way a working profile gets shadowed.
+    """
+    profile_name = os.environ.get("ANTHROPIC_PROFILE") or "default"
+    profile = profile_credentials()
+
+    if "ANTHROPIC_API_KEY" in os.environ:
+        if not os.environ["ANTHROPIC_API_KEY"]:
+            return "empty ANTHROPIC_API_KEY", (
+                "an empty ANTHROPIC_API_KEY still wins over everything else and will "
+                "fail to authenticate - unset it entirely"
+            )
+        shadowed = (
+            f"; this shadows your `ant auth login` profile {profile_name!r} - unset it to use the profile"
+            if profile
+            else ""
+        )
+        return "ANTHROPIC_API_KEY", f"from the environment or .env{shadowed}"
+    if os.environ.get("ANTHROPIC_AUTH_TOKEN"):
+        return "ANTHROPIC_AUTH_TOKEN", "from the environment or .env"
+    if profile:
+        return f"ant profile {profile_name!r}", f"a Claude subscription login; no API key needed ({profile})"
+    return "", ""
 
 
 def is_credentials_error(exc: BaseException) -> bool:

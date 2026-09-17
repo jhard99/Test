@@ -185,6 +185,43 @@ search**, so the `websearch` source skips itself with a log line instead of
 failing; **Vertex** supports only the basic web-search variant, which is
 selected automatically.
 
+### Using a Claude subscription (`ant auth login`)
+
+If your organization doesn't allow API access, this is the route. One command,
+no key, no `.env` entry:
+
+```bash
+ant auth login          # opens a browser; stores a profile in ~/.config/anthropic
+ainews check            # should now print: credentials: ant profile 'default'
+ainews run              # full synthesis
+```
+
+`build_client` constructs a bare `anthropic.Anthropic()`, and the SDK resolves
+an `ant auth login` profile on its own — nothing else to configure.
+
+> **The one trap.** A profile is consulted *only* when no API key is set, and
+> **membership wins, not truthiness** — `ANTHROPIC_API_KEY=` (empty) or a
+> leftover `sk-ant-...` placeholder in `.env` will beat a perfectly good profile
+> and fail to authenticate. This is why `env.example` ships that line commented
+> out. `ainews check` names whichever credential actually wins and warns when one
+> is shadowing your profile.
+
+**This does not extend to the scheduled GitHub Actions run.** A profile is a
+short-lived OAuth token that the SDK refreshes from the credential file on your
+disk; its refresh token also hard-expires rather than sliding with use. There is
+no long-lived secret to hand CI, so a subscription login is a *local* capability.
+Three ways to live with that:
+
+| Want | Do |
+|---|---|
+| Synthesis, on a schedule, no API | Run the digest **locally** on a timer (macOS `launchd`, or `cron`) instead of in Actions |
+| Keep using Actions | Let it run `--no-llm` (collection + keyword digest, no credentials), and run `ainews run` locally when you want the written version |
+| Synthesis in CI | Needs a credential CI can hold: an API key, or Bedrock/Vertex — which bill through existing cloud spend and are often easier to get approved than a new vendor account |
+
+Running an unattended weekly job off a personal subscription seat is also a
+different thing from interactive use, so it's worth a glance at your own
+organization's policy before wiring it to a scheduler.
+
 ### "Your organization is blocking new organization creation for domain …"
 
 That error comes from Anthropic *signup*, not from the network: your employer or
@@ -249,7 +286,7 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 83 tests, no network required
+pytest            # 89 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article
