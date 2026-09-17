@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ainews import __version__, heuristic
 from ainews.config import Config, ConfigError, load_dotenv
+from ainews.cookies import BROWSERS, CookieExportError, export_cookies
 from ainews.deliver import DeliveryError, send_email
 from ainews.digest import DigestInput, fallback_digest, plural, week_label, write_digest
 from ainews.http import Fetcher
@@ -340,6 +341,44 @@ def cmd_run(args: argparse.Namespace, cfg: Config) -> int:
         fetcher.close()
 
 
+def cmd_cookies(args: argparse.Namespace, cfg: Config) -> int:
+    """Export subscription cookies from a local browser."""
+    if not cfg.http.cookie_domains:
+        log.error(
+            "http.cookie_domains is empty, so there is nothing to export. Add the "
+            "subscription domains you want full article text for."
+        )
+        return 1
+
+    out = Path(args.out or "cookies.txt")
+    try:
+        found = export_cookies(cfg.http.cookie_domains, out, browser=args.browser)
+    except CookieExportError as exc:
+        log.error("%s", exc)
+        return 1
+
+    print(f"wrote {out} (mode 600)")
+    for domain, names in sorted(found.items()):
+        if names:
+            # Names only - a cookie value is a live credential.
+            print(f"  {domain:20} {len(names)} cookies: {', '.join(names[:6])}"
+                  f"{' ...' if len(names) > 6 else ''}")
+        else:
+            print(f"  {domain:20} none found - are you signed in to it in {args.browser}?")
+
+    if not any(found.values()):
+        log.error("no cookies found for any configured domain")
+        return 1
+
+    print(
+        f"\nPoint the agent at it:\n"
+        f"    echo 'NEWS_COOKIES_FILE={out.resolve()}' >> .env\n"
+        f"then `ainews check` should report: cookies: loaded for "
+        f"{', '.join(d for d, n in sorted(found.items()) if n)}"
+    )
+    return 0
+
+
 def cmd_sources(args: argparse.Namespace, cfg: Config) -> int:
     print("Available source types:")
     for name in available_types():
@@ -399,6 +438,21 @@ def build_parser() -> argparse.ArgumentParser:
         "purpose: a source with nothing in a month is broken, not quiet.",
     )
     p_check.set_defaults(func=cmd_check)
+
+    p_cookies = sub.add_parser(
+        "cookies",
+        help="export your subscription cookies from a local browser to cookies.txt",
+    )
+    p_cookies.add_argument(
+        "--browser",
+        default="chrome",
+        choices=BROWSERS,
+        help="browser to read cookies from (default: chrome)",
+    )
+    p_cookies.add_argument(
+        "--out", type=Path, help="where to write the file (default: ./cookies.txt)"
+    )
+    p_cookies.set_defaults(func=cmd_cookies)
 
     p_sources = sub.add_parser("sources", help="list available source types")
     p_sources.set_defaults(func=cmd_sources)

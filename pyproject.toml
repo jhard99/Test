@@ -20,6 +20,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# `ainews cookies` reads your browser's own cookie store, so you don't have to
+# install an extension that can read every cookie you have. Optional: exporting
+# a cookies.txt by hand works just as well.
+cookies = ["browser-cookie3>=0.19.1"]
 
 [project.scripts]
 ainews = "ainews.cli:main"
