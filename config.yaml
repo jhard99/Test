@@ -15,16 +15,23 @@ state_db: state/ainews.sqlite3
 
 llm:
   # How Claude is reached:
-  #   anthropic - first-party API. Uses ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-  #               or an `ant auth login` profile (a Claude subscription login,
-  #               no API key needed).
+  #   anthropic  - first-party API. Uses ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+  #                or an `ant auth login` profile.
+  #   claude_cli - shells out to the `claude` CLI (Claude Code) in
+  #                non-interactive mode, using Claude Code's own login. The one
+  #                option that needs neither an API key nor access to
+  #                platform.claude.com, so it works where an organization allows
+  #                Claude Code but blocks the API and Console. Note: no
+  #                server-side web search, so the `websearch` source skips
+  #                itself, and no structured outputs, so triage JSON is parsed
+  #                tolerantly rather than schema-enforced.
   #   bedrock   - Amazon Bedrock, using your normal AWS credentials.
   #               Note: Bedrock has no server-side web search, so the
   #               `websearch` source below skips itself automatically.
   #   vertex    - Google Cloud Vertex AI, using GCP application-default creds.
   #               Set vertex_project. Web search works (basic variant).
   #   foundry   - Microsoft Foundry. Set foundry_resource.
-  provider: anthropic
+  provider: claude_cli
   aws_region: ${AWS_REGION:-us-east-1}
   vertex_project: ${GCP_PROJECT:-}
   vertex_region: ${GCP_REGION:-global}
@@ -38,8 +45,14 @@ llm:
   # The digest writer. Keep this on the strongest model you're willing to pay for.
   model: claude-opus-5
   # Triage + clustering run over every candidate item, so this is where volume
-  # lives. Switch to claude-sonnet-5 or claude-haiku-4-5 to cut the bill.
-  triage_model: claude-opus-5
+  # lives - about 7 batches a week at a 7-day window. On provider: claude_cli
+  # that volume is charged against a Claude subscription's quota rather than a
+  # bill, which is a smaller budget, so this runs on Haiku: measured through the
+  # CLI it returns schema-valid triage JSON, preserves item indices and rejects
+  # non-AI stories correctly, for roughly a fifth of Opus's token cost. The
+  # writer below stays on Opus, which is where digest quality actually comes
+  # from. Raise this to claude-sonnet-5 if triage judgement looks too blunt.
+  triage_model: claude-haiku-4-5
   triage_effort: low
   writer_effort: high
   triage_batch_size: 40

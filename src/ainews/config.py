@@ -85,6 +85,9 @@ class LLMConfig:
     provider: str = "anthropic"
     # Set false to run with no model access at all: keyword triage instead.
     enabled: bool = True
+    # provider: claude_cli - which `claude` binary to shell out to. Blank uses
+    # whatever is on PATH.
+    claude_binary: str = ""
     aws_region: str = "us-east-1"
     vertex_project: str = ""
     vertex_region: str = "global"
