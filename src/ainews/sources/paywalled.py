@@ -48,7 +48,24 @@ class PaywalledSource(RSSSource):
         self.options["full_text"] = wants_full_text and has_creds
 
         items = super().fetch(since)
+        stubs = 0
         for item in items:
             item.extra.setdefault("subscription", domain or self.name)
             item.extra.setdefault("authenticated", has_creds)
+            if item.extra.get("paywalled"):
+                stubs += 1
+
+        # Exported cookies expire, and when they do nothing obvious breaks: every
+        # article comes back as a paywall stub, the digest quietly thins out, and
+        # the only trace is one INFO line per article. Say it once, loudly, with
+        # the fix - this is the same silent-degradation failure as a dead feed.
+        if has_creds and stubs and stubs >= max(3, len(items) // 2):
+            log.warning(
+                "%s: %d of %d articles read as paywall stubs despite having cookies "
+                "for %s - that session has probably expired; re-export cookies.txt",
+                self.name,
+                stubs,
+                len(items),
+                domain,
+            )
         return items

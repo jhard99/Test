@@ -127,9 +127,50 @@ By default these run off each publisher's public RSS feed: headline, abstract
 and link. That is enough for the digest to tell you what happened and where to
 read it, and it needs no credentials.
 
-For full article text, export a Netscape-format `cookies.txt` from the browser
-profile where you are already signed in to your subscription and point
-`NEWS_COOKIES_FILE` at it. Then:
+For full article text, hand it your own logged-in session as a Netscape-format
+`cookies.txt`:
+
+1. **Check the domain is allowed.** `http.cookie_domains` in `config.yaml`
+   already lists `nytimes.com`, `wsj.com` and `theatlantic.com`. Anything not in
+   that list gets no cookies, whatever the file contains.
+2. **Export the cookies** from the browser profile where you are already signed
+   in. Any exporter that writes the Netscape/`curl` format works; on Chrome,
+   *Get cookies.txt LOCALLY* is open-source and exports without uploading
+   anywhere. Treat this step with care either way: an extension that can read
+   your cookies can read *all* of them, so prefer an open-source one, check what
+   it requests, and remove it when you're done.
+3. **Point the tool at the file** and keep it private:
+
+   ```bash
+   mv ~/Downloads/cookies.txt ~/ai-news-agent/cookies.txt
+   chmod 600 ~/ai-news-agent/cookies.txt
+   echo 'NEWS_COOKIES_FILE=/Users/you/ai-news-agent/cookies.txt' >> ~/ai-news-agent/.env
+   ```
+
+   `cookies.txt` and `.env` are both gitignored. The scheduled run reads `.env`
+   from the repository directory, so this is all the launchd agent needs too.
+
+4. **Confirm it took:**
+
+   ```
+   $ ainews check
+   cookies:     loaded for nytimes.com, wsj.com
+   ```
+
+   Then `ainews check --probe` shows the item counts, and a run logs
+   `NYT Technology [paywalled]: 18 items` without the "using headlines and
+   abstracts only" line.
+
+**Sessions expire**, and when they do nothing breaks loudly — every article
+comes back as a paywall stub and the digest just gets thinner. So the run says
+so once, with the fix:
+
+```
+WARNING NYT: 12 of 18 articles read as paywall stubs despite having cookies
+        for nytimes.com - that session has probably expired; re-export cookies.txt
+```
+
+With the file in place:
 
 - only the domains under `http.cookie_domains` receive cookies — every other
   cookie in the file is discarded when it loads, so a full browser export can't
@@ -350,7 +391,7 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 109 tests, no network required
+pytest            # 116 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article
