@@ -74,7 +74,11 @@ lane of their own in the digest.
 
 1. In Gmail, turn on 2FA and create an [App Password](https://myaccount.google.com/apppasswords).
    Your normal password will not work over IMAP.
-2. Put it in `.env` as `IMAP_PASSWORD`.
+2. Put it in `.env` as `IMAP_PASSWORD`, **without the spaces** —
+   `abcdefghijklmnop`, not `abcd efgh ijkl mnop`. Google separates those groups
+   with non-breaking spaces, which IMAP can't transmit; the agent strips
+   whitespace for you and logs that it did, but the bare 16 characters are what
+   it wants.
 3. Best results: make a Gmail filter that labels AI newsletters into their own
    label (say `AI News`), set `IMAP_FOLDER=AI News`, and delete the `senders:`
    list from the config so everything in that label is read.
@@ -247,6 +251,12 @@ launchctl kickstart -k gui/$UID/com.jhard99.ainews.weekly
 Because of this, **the Actions schedule below is commented out** — a scheduled
 run would fail every Monday looking for a `claude` binary that isn't on a GitHub
 runner. Re-enable it if you move to a credential CI can hold.
+
+The manual **Run workflow** button still works, and notices the same problem:
+if `config.yaml` names `claude_cli` and no `claude` binary is present, the run
+falls back to `--no-llm` and annotates itself with a warning, rather than
+failing. So the button gives you the keyword digest — collection, dedupe and
+ranking, but no written synthesis — until CI has a credential of its own.
 
 ### GitHub Actions
 
@@ -436,7 +446,7 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 118 tests, no network required
+pytest            # 124 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article

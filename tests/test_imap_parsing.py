@@ -1,6 +1,6 @@
 from email.message import EmailMessage
 
-from ainews.sources.imap import _decode, message_body
+from ainews.sources.imap import _clean_credential, _clean_folder, _decode, message_body
 
 
 def build_newsletter() -> EmailMessage:
@@ -43,3 +43,47 @@ def test_message_body_skips_attachments():
 def test_decode_handles_encoded_headers():
     assert _decode("=?utf-8?q?Weekly_AI_Digest?=") == "Weekly AI Digest"
     assert _decode(None) == ""
+
+
+# --- credential hygiene ------------------------------------------------------
+#
+# A Gmail App Password copied out of Google's UI carries U+00A0 non-breaking
+# spaces between its four-character groups. imaplib encodes command arguments as
+# ASCII, so the login raised UnicodeEncodeError before anything reached the
+# server - and since a failing source is caught per-source, the only symptom was
+# that newsletters silently never appeared. Seen in a real CI run:
+#   UnicodeEncodeError: 'ascii' codec can't encode character '\xa0' in position 5
+
+
+def test_a_pasted_gmail_app_password_is_usable():
+    pasted = "abcd\xa0efgh\xa0ijkl\xa0mnop"
+    cleaned = _clean_credential(pasted, "password", "newsletters")
+    assert cleaned == "abcdefghijklmnop"
+    cleaned.encode("ascii")  # what imaplib does; used to raise
+
+
+def test_plain_spaces_in_a_pasted_password_go_too():
+    assert _clean_credential("abcd efgh ijkl mnop", "password", "s") == "abcdefghijklmnop"
+
+
+def test_a_clean_credential_is_untouched():
+    assert _clean_credential("hunter2", "password", "s") == "hunter2"
+    assert _clean_credential("me@example.com", "username", "s") == "me@example.com"
+
+
+def test_surrounding_whitespace_from_a_secret_is_trimmed():
+    """A trailing newline is easy to get into a CI secret."""
+    assert _clean_credential("me@example.com\n", "username", "s") == "me@example.com"
+
+
+def test_folder_names_keep_their_spaces():
+    """Unlike a credential, "AI News" is a legitimate folder name."""
+    assert _clean_folder("AI News") == "AI News"
+    assert _clean_folder("  INBOX  ") == "INBOX"
+
+
+def test_a_non_breaking_space_in_a_folder_becomes_a_real_space():
+    """Same encoding error, but here the repair is a space, not deletion."""
+    cleaned = _clean_folder("AI\xa0News")
+    assert cleaned == "AI News"
+    cleaned.encode("ascii")

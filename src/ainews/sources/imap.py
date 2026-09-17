@@ -23,6 +23,43 @@ log = logging.getLogger(__name__)
 _MAX_BODY_CHARS = 60_000
 
 
+def _clean_credential(value: str, label: str, source: str) -> str:
+    """Remove whitespace from an IMAP username or password.
+
+    Gmail shows an App Password as four groups of four characters, and copying
+    it out of that page brings the separators along - as U+00A0 non-breaking
+    spaces, not plain ones. `imaplib` encodes command arguments as ASCII, so a
+    pasted password raises UnicodeEncodeError before anything is sent, and
+    because a failing source is caught per-source the only symptom is that
+    newsletters quietly never appear.
+
+    App passwords are meant to be entered without the spaces, and mail clients
+    strip them, so do the same. A genuine space inside an IMAP password is
+    vanishingly rare next to this paste, but say when something was removed so
+    a changed login is explainable.
+    """
+    cleaned = "".join(value.split())
+    if cleaned != value:
+        log.info(
+            "%s: removed whitespace from the IMAP %s (a pasted Gmail App Password "
+            "carries non-breaking spaces that imaplib cannot encode)",
+            source,
+            label,
+        )
+    return cleaned
+
+
+def _clean_folder(value: str) -> str:
+    """Trim a folder name and repair unencodable whitespace inside it.
+
+    Folder names legitimately contain spaces ("AI News"), so unlike a
+    credential this keeps them - but a non-breaking space would hit the same
+    imaplib ASCII encoding error, and it is always a typo or a paste artifact,
+    so it becomes a normal space.
+    """
+    return "".join(" " if ch.isspace() else ch for ch in value.strip())
+
+
 def _decode(value: str | None) -> str:
     if not value:
         return ""
@@ -83,9 +120,9 @@ class ImapSource(Source):
             log.warning("%s: skipping, missing %s", self.name, ", ".join(missing))
             return []
 
-        host = str(self.options["host"])
+        host = str(self.options["host"]).strip()
         port = int(self.options.get("port", 993))
-        folder = str(self.options.get("folder", "INBOX"))
+        folder = _clean_folder(str(self.options.get("folder", "INBOX")))
         senders = [s.lower() for s in self.options.get("senders", [])]
         subject_include = [s.lower() for s in self.options.get("subject_include", [])]
         mark_seen = bool(self.options.get("mark_seen", False))
@@ -97,7 +134,10 @@ class ImapSource(Source):
         items: list[Item] = []
         try:
             with imaplib.IMAP4_SSL(host, port) as conn:
-                conn.login(str(self.options["username"]), str(self.options["password"]))
+                conn.login(
+                    _clean_credential(str(self.options["username"]), "username", self.name),
+                    _clean_credential(str(self.options["password"]), "password", self.name),
+                )
                 status, _ = conn.select(folder, readonly=not mark_seen)
                 if status != "OK":
                     log.error("%s: cannot open folder %r", self.name, folder)
