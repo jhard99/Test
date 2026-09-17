@@ -143,7 +143,26 @@ no archive mirrors. If a page stays paywalled, the item is marked and the digest
 says so. Check your publishers' terms before using it for anything beyond
 personal use.
 
-## Scheduling (GitHub Actions)
+## Scheduling
+
+Two options, and which one you can use depends on how you authenticate.
+
+**Locally, with launchd (what this repository uses).** `provider: claude_cli`
+borrows Claude Code's login, which only exists on your machine, so the schedule
+lives there too. A LaunchAgent runs `run-weekly.sh` every Monday at 09:00 local:
+it runs the digest, commits and pushes it to this repository, logs to
+`~/Library/Logs/ainews/run.log`, and sends a macOS notification on success or
+failure. Trigger one immediately with:
+
+```bash
+launchctl kickstart -k gui/$UID/com.jhard99.ainews.weekly
+```
+
+Because of this, **the Actions schedule below is commented out** — a scheduled
+run would fail every Monday looking for a `claude` binary that isn't on a GitHub
+runner. Re-enable it if you move to a credential CI can hold.
+
+### GitHub Actions
 
 `.github/workflows/weekly-digest.yml` runs the digest every Monday at 13:00 UTC,
 then delivers it four ways: **an issue on this repository** (needs no secrets —
@@ -174,7 +193,8 @@ Three supported routes, set with `llm.provider` in `config.yaml`:
 
 | Situation | Setting | Credentials used |
 |---|---|---|
-| You have a Claude subscription but no API key | `provider: anthropic` | Run `ant auth login` once; the SDK picks up the profile automatically — no `ANTHROPIC_API_KEY` needed |
+| **Your org allows Claude Code but blocks the API and Console** | `provider: claude_cli` | Claude Code's own login — see *Synthesis through the `claude` CLI* |
+| You have a platform login but no API key | `provider: anthropic` | Run `ant auth login` once; the SDK picks up the profile automatically — no `ANTHROPIC_API_KEY` needed |
 | Your org uses AWS | `provider: bedrock` | Your normal AWS credentials (env vars, profile or role) |
 | Your org uses Google Cloud | `provider: vertex` + `vertex_project` | GCP application-default credentials (`gcloud auth application-default login`) |
 | Your org uses Azure | `provider: foundry` + `foundry_resource` | Foundry credentials |
@@ -185,6 +205,85 @@ search**, so the `websearch` source skips itself with a log line instead of
 failing; **Vertex** supports only the basic web-search variant, which is
 selected automatically.
 
+### Synthesis through the `claude` CLI (no API, no Console)
+
+`ant auth login` is **not** a way around an organization that blocks API access:
+its authorize page lives on `platform.claude.com`, and the profile it mints is a
+platform credential bound to a Console org and workspace. If that host is
+blocked for you, the login cannot complete — a claude.ai subscription is not API
+access, and there is no consumer-site login that substitutes for one.
+
+What does work, if Claude Code itself runs for you, is letting Claude Code do
+the model calls:
+
+```yaml
+llm:
+  provider: claude_cli     # shells out to `claude -p`
+  model: claude-opus-5     # writes the digest
+  triage_model: claude-haiku-4-5
+```
+
+`ainews check` confirms it:
+
+```
+provider:    claude_cli
+credentials: Claude Code's own login, via /Users/you/.local/bin/claude
+             no API key and no Console access needed
+```
+
+Triage and digest-writing run through `claude -p --output-format json` with
+every tool denied (they are pure text transformations, and a tool call would
+stall an unattended run on a permission prompt). Three things to know:
+
+- **It spends your Claude subscription quota**, not an API bill — about eight
+  model calls a week. Triage is the volume, which is why `triage_model` defaults
+  to Haiku here; measured through the CLI, Haiku still returns schema-valid
+  triage JSON, preserves item indices and rejects non-AI stories correctly. The
+  writer stays on Opus, which is where digest quality comes from.
+- **No structured outputs.** The CLI has no `output_config`, so the triage
+  schema is requested in the prompt and the reply is parsed tolerantly (bare,
+  fenced, or wrapped in prose) instead of being schema-enforced.
+- **No server-side web search**, so the `websearch` source skips itself, exactly
+  as it does on Bedrock. You lose open-web discovery; every configured feed still
+  contributes.
+
+### Using a platform login (`ant auth login`)
+
+If you *can* reach `platform.claude.com`, this avoids managing a static key. One
+command, no key, no `.env` entry:
+
+```bash
+ant auth login          # opens a browser; stores a profile in ~/.config/anthropic
+ainews check            # should now print: credentials: ant profile 'default'
+ainews run              # full synthesis
+```
+
+`build_client` constructs a bare `anthropic.Anthropic()`, and the SDK resolves
+an `ant auth login` profile on its own — nothing else to configure.
+
+> **The one trap.** A profile is consulted *only* when no API key is set, and
+> **membership wins, not truthiness** — `ANTHROPIC_API_KEY=` (empty) or a
+> leftover `sk-ant-...` placeholder in `.env` will beat a perfectly good profile
+> and fail to authenticate. This is why `env.example` ships that line commented
+> out. `ainews check` names whichever credential actually wins and warns when one
+> is shadowing your profile.
+
+**This does not extend to the scheduled GitHub Actions run.** A profile is a
+short-lived OAuth token that the SDK refreshes from the credential file on your
+disk; its refresh token also hard-expires rather than sliding with use. There is
+no long-lived secret to hand CI, so a subscription login is a *local* capability.
+Three ways to live with that:
+
+| Want | Do |
+|---|---|
+| Synthesis, on a schedule, no API | Run the digest **locally** on a timer (macOS `launchd`, or `cron`) instead of in Actions |
+| Keep using Actions | Let it run `--no-llm` (collection + keyword digest, no credentials), and run `ainews run` locally when you want the written version |
+| Synthesis in CI | Needs a credential CI can hold: an API key, or Bedrock/Vertex — which bill through existing cloud spend and are often easier to get approved than a new vendor account |
+
+Running an unattended weekly job off a personal subscription seat is also a
+different thing from interactive use, so it's worth a glance at your own
+organization's policy before wiring it to a scheduler.
+
 ### "Your organization is blocking new organization creation for domain …"
 
 That error comes from Anthropic *signup*, not from the network: your employer or
@@ -192,9 +291,11 @@ university has claimed the email domain and disabled self-serve account
 creation. Nothing is blocking this tool from reaching Claude. In rough order of
 effort:
 
-1. `ant auth login` — if you have any Claude subscription that works in Claude
-   Code, the agent uses it with no API key. One command; `ainews check` will
-   tell you whether it took.
+1. `provider: claude_cli` — if Claude Code runs for you, the agent borrows its
+   login and needs no API key and no Console access at all. This is the one
+   option that survives a blocked `platform.claude.com`; see *Synthesis through
+   the `claude` CLI*. (`ant auth login` does **not** help here — its authorize
+   page is on `platform.claude.com`, so the same block stops it.)
 2. Ask whoever administers your organization's Anthropic account for API access
    — that error usually means one already exists.
 3. Sign up with a personal address for personal use (this tool reads public news
@@ -249,7 +350,7 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 83 tests, no network required
+pytest            # 109 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article

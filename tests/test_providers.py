@@ -4,7 +4,14 @@ import anthropic
 import pytest
 
 from ainews.config import Config, LLMConfig
-from ainews.llm import LLMError, build_client, capabilities, resolve_model
+from ainews.llm import (
+    LLMError,
+    build_client,
+    capabilities,
+    credentials_source,
+    profile_credentials,
+    resolve_model,
+)
 
 
 def test_default_provider_is_the_first_party_api(monkeypatch):
@@ -71,3 +78,73 @@ def test_config_parses_provider_settings():
     assert cfg.llm.provider == "bedrock"
     assert cfg.llm.enabled is False
     assert cfg.llm.aws_region == "eu-west-1"
+
+
+# --- credential precedence (subscription login vs API key) -------------------
+#
+# The SDK consults an `ant auth login` profile only when no API key is set, and
+# *membership* is what counts, not truthiness. These pin the reporting that
+# `ainews check` does, because a shadowed profile otherwise looks like a
+# working one right up until the run fails to authenticate.
+
+
+def _profile(tmp_path, name="default"):
+    creds = tmp_path / "credentials"
+    creds.mkdir(parents=True, exist_ok=True)
+    (creds / f"{name}.json").write_text("{}")
+    return tmp_path
+
+
+def test_profile_is_found_when_no_key_is_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(_profile(tmp_path)))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    assert profile_credentials() is not None
+    source, note = credentials_source()
+    assert "ant profile" in source
+    assert "no API key needed" in note
+
+
+def test_no_credentials_at_all_reports_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(tmp_path))  # no credentials/ dir
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    assert profile_credentials() is None
+    assert credentials_source() == ("", "")
+
+
+def test_an_api_key_shadows_the_profile_and_check_says_so(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(_profile(tmp_path)))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-placeholder")
+    source, note = credentials_source()
+    assert source == "ANTHROPIC_API_KEY"
+    assert "shadows" in note
+
+
+def test_an_empty_api_key_still_wins_its_slot(tmp_path, monkeypatch):
+    """The nastiest case: `ANTHROPIC_API_KEY=` in a .env authenticates with an
+    empty key and beats a perfectly good profile."""
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(_profile(tmp_path)))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    source, note = credentials_source()
+    assert source == "empty ANTHROPIC_API_KEY"
+    assert "unset it" in note
+
+
+def test_named_profile_is_honoured(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(_profile(tmp_path, "work")))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "work")
+    assert profile_credentials() is not None
+    assert "work" in credentials_source()[0]
+    # The default profile does not exist in that dir.
+    monkeypatch.setenv("ANTHROPIC_PROFILE", "default")
+    assert profile_credentials() is None
+
+
+def test_auth_token_beats_a_profile_but_not_a_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(_profile(tmp_path)))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-token")
+    assert credentials_source()[0] == "ANTHROPIC_AUTH_TOKEN"

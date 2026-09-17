@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,7 +14,13 @@ from ainews.config import Config, ConfigError, load_dotenv
 from ainews.deliver import DeliveryError, send_email
 from ainews.digest import DigestInput, fallback_digest, plural, week_label, write_digest
 from ainews.http import Fetcher
-from ainews.llm import LLMCredentialsError, LLMError, build_client, capabilities
+from ainews.llm import (
+    LLMCredentialsError,
+    LLMError,
+    build_client,
+    capabilities,
+    credentials_source,
+)
 from ainews.pipeline import cluster, collect, dedupe, drop_seen, select, split_newsletters, triage
 from ainews.render import title_for, to_html, to_markdown
 from ainews.sources import available_types, build_source
@@ -101,8 +108,6 @@ def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
     print(f"state db:    {cfg.state_db}")
     print(f"output dir:  {cfg.output_dir}")
 
-    import os
-
     if not cfg.llm.enabled:
         print("\nmodels:      disabled (llm.enabled: false) - keyword triage, no API calls")
     else:
@@ -112,14 +117,28 @@ def cmd_check(args: argparse.Namespace, cfg: Config) -> int:
         if caps.note:
             print(f"             note: {caps.note}")
         if cfg.llm.provider == "anthropic":
-            if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-                print("credentials: found in environment")
+            source, note = credentials_source()
+            if source:
+                print(f"credentials: {source}")
+                if note:
+                    print(f"             {note}")
             else:
                 print(
-                    "credentials: no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN. An `ant auth login`\n"
-                    "             profile also works; or set llm.provider to bedrock/vertex/foundry,\n"
-                    "             or llm.enabled: false to run with keyword triage."
+                    "credentials: none found. Either run `ant auth login` to use a Claude\n"
+                    "             subscription with no API key, or set ANTHROPIC_API_KEY; or set\n"
+                    "             llm.provider to bedrock/vertex/foundry, or llm.enabled: false\n"
+                    "             to run with keyword triage."
                 )
+        elif cfg.llm.provider == "claude_cli":
+            binary = cfg.llm.claude_binary or "claude"
+            found = shutil.which(binary)
+            if found:
+                print(f"credentials: Claude Code's own login, via {found}")
+                print("             no API key and no Console access needed")
+            else:
+                ok = False
+                print(f"credentials: {binary!r} is not on PATH - install Claude Code, or")
+                print("             point llm.claude_binary at it")
         elif cfg.llm.provider == "bedrock":
             print(f"credentials: AWS default chain, region {cfg.llm.aws_region}")
         elif cfg.llm.provider == "vertex":

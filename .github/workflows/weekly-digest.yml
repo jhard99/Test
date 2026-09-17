@@ -1,9 +1,19 @@
 name: Weekly AI digest
 
 on:
-  schedule:
-    # Mondays 13:00 UTC (09:00 ET / 06:00 PT). Cron runs on UTC year-round.
-    - cron: "0 13 * * 1"
+  # The weekly schedule is off because this repository's config.yaml uses
+  # `provider: claude_cli`, which needs the `claude` binary and Claude Code's
+  # login - neither of which exists on a GitHub runner, so a scheduled run would
+  # fail every Monday. The digest is produced locally instead, by the launchd
+  # agent com.jhard99.ainews.weekly (see "Scheduling" in the README).
+  #
+  # Re-enable this if you switch to a provider CI can authenticate as - an API
+  # key, Bedrock or Vertex - or if you want a keyword-only digest, in which case
+  # also set llm.enabled: false.
+  #
+  # schedule:
+  #   # Mondays 13:00 UTC (09:00 ET / 06:00 PT). Cron runs on UTC year-round.
+  #   - cron: "0 13 * * 1"
   workflow_dispatch:
     inputs:
       window_days:

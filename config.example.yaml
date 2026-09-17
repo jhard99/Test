@@ -15,9 +15,16 @@ state_db: state/ainews.sqlite3
 
 llm:
   # How Claude is reached:
-  #   anthropic - first-party API. Uses ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
-  #               or an `ant auth login` profile (a Claude subscription login,
-  #               no API key needed).
+  #   anthropic  - first-party API. Uses ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+  #                or an `ant auth login` profile.
+  #   claude_cli - shells out to the `claude` CLI (Claude Code) in
+  #                non-interactive mode, using Claude Code's own login. The one
+  #                option that needs neither an API key nor access to
+  #                platform.claude.com, so it works where an organization allows
+  #                Claude Code but blocks the API and Console. Note: no
+  #                server-side web search, so the `websearch` source skips
+  #                itself, and no structured outputs, so triage JSON is parsed
+  #                tolerantly rather than schema-enforced.
   #   bedrock   - Amazon Bedrock, using your normal AWS credentials.
   #               Note: Bedrock has no server-side web search, so the
   #               `websearch` source below skips itself automatically.
