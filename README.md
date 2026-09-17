@@ -143,7 +143,26 @@ no archive mirrors. If a page stays paywalled, the item is marked and the digest
 says so. Check your publishers' terms before using it for anything beyond
 personal use.
 
-## Scheduling (GitHub Actions)
+## Scheduling
+
+Two options, and which one you can use depends on how you authenticate.
+
+**Locally, with launchd (what this repository uses).** `provider: claude_cli`
+borrows Claude Code's login, which only exists on your machine, so the schedule
+lives there too. A LaunchAgent runs `run-weekly.sh` every Monday at 09:00 local:
+it runs the digest, commits and pushes it to this repository, logs to
+`~/Library/Logs/ainews/run.log`, and sends a macOS notification on success or
+failure. Trigger one immediately with:
+
+```bash
+launchctl kickstart -k gui/$UID/com.jhard99.ainews.weekly
+```
+
+Because of this, **the Actions schedule below is commented out** — a scheduled
+run would fail every Monday looking for a `claude` binary that isn't on a GitHub
+runner. Re-enable it if you move to a credential CI can hold.
+
+### GitHub Actions
 
 `.github/workflows/weekly-digest.yml` runs the digest every Monday at 13:00 UTC,
 then delivers it four ways: **an issue on this repository** (needs no secrets —
