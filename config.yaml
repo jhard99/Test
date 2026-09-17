@@ -115,14 +115,26 @@ sources:
     name: NYT Technology
     domain: nytimes.com
     url: https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml
-    full_text: true
+    # full_text is off. Measured against a real logged-in session, nytimes.com
+    # answers HTTP 403 to a non-browser client even with valid subscription
+    # cookies - robots.txt permits the path, the server refuses anyway. The ~19
+    # article fetches this made each week were all wasted, so it now uses the
+    # feed's headline and abstract, which is what the digest ended up with
+    # regardless. Set back to true if that ever changes.
+    full_text: false
     include: ["ai", "artificial intelligence", "openai", "anthropic", "chatbot", "algorithm", "chip", "data center"]
 
   - type: paywalled
     name: NYT Business
     domain: nytimes.com
     url: https://rss.nytimes.com/services/xml/rss/nyt/Business.xml
-    full_text: true
+    # full_text is off. Measured against a real logged-in session, nytimes.com
+    # answers HTTP 403 to a non-browser client even with valid subscription
+    # cookies - robots.txt permits the path, the server refuses anyway. The ~29
+    # article fetches this made each week were all wasted, so it now uses the
+    # feed's headline and abstract, which is what the digest ended up with
+    # regardless. Set back to true if that ever changes.
+    full_text: false
     include: ["ai", "artificial intelligence", "openai", "anthropic", "nvidia", "chip"]
 
   - type: paywalled
@@ -132,7 +144,11 @@ sources:
     # endpoint still answers 200 but has been frozen since January 2025, so it
     # contributed nothing to a 7-day window.
     url: https://feeds.content.dowjones.io/public/rss/RSSWSJD
-    full_text: true
+    # full_text is off. wsj.com's robots.txt disallows its article paths for
+    # every user-agent, so the fetcher never requested them in the first place -
+    # having subscription cookies makes no difference here. Headline and abstract
+    # from the feed is what the digest gets. Set back to true if that changes.
+    full_text: false
 
   - type: paywalled
     name: The Atlantic - Technology

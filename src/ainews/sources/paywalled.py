@@ -49,11 +49,33 @@ class PaywalledSource(RSSSource):
 
         items = super().fetch(since)
         stubs = 0
+        unfetchable = 0
         for item in items:
             item.extra.setdefault("subscription", domain or self.name)
             item.extra.setdefault("authenticated", has_creds)
             if item.extra.get("paywalled"):
                 stubs += 1
+            elif self.options["full_text"] and not (item.text or "").strip():
+                # Not a stub - nothing came back at all.
+                unfetchable += 1
+
+        # Distinct from an expired session, and worth separating: the cookies are
+        # fine, the publisher just won't serve the article to a program. WSJ's
+        # robots.txt disallows its article paths; NYT's allows them but answers
+        # 403 to a non-browser client. Without this the domain contributes
+        # headlines only while `ainews check` still says "cookies: loaded", and
+        # the obvious next move - re-exporting cookies - changes nothing.
+        if has_creds and unfetchable >= max(3, len(items) // 2):
+            log.warning(
+                "%s: no article body for %d of %d items, though cookies for %s are "
+                "loaded - this publisher refuses programmatic article requests "
+                "(HTTP 403) or disallows them in robots.txt. The digest will use "
+                "headlines and abstracts here. Re-exporting cookies will not help.",
+                self.name,
+                unfetchable,
+                len(items),
+                domain,
+            )
 
         # Exported cookies expire, and when they do nothing obvious breaks: every
         # article comes back as a paywall stub, the digest quietly thins out, and

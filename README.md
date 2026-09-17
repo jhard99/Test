@@ -62,6 +62,7 @@ commit. Real values live in `.env` locally and in GitHub Actions secrets in CI.
 | `ainews run` | The full weekly pipeline. `--dry-run` skips email and state, `--no-llm` makes no API calls (keyword triage instead), `--include-seen` re-includes previously covered stories, `--window-days N` / `--since YYYY-MM-DD` change the window. |
 | `ainews fetch` | List what the sources return right now. No Claude calls. |
 | `ainews check` | Validate config, credentials and every source without fetching. `--probe` also fetches from each source and reports how many items it really returned, flagging dead (`EMPTY`) and frozen (`STALE`) feeds — see *When a feed dies*. |
+| `ainews cookies` | Export your subscription cookies from a local browser to `cookies.txt`, for full article text. `--browser chrome|safari|firefox|edge|brave`. |
 | `ainews sources` | List available source types. |
 
 `ainews run --no-llm` makes no API calls at all — see *Running without an Anthropic API key*.
@@ -133,18 +134,24 @@ For full article text, hand it your own logged-in session as a Netscape-format
 1. **Check the domain is allowed.** `http.cookie_domains` in `config.yaml`
    already lists `nytimes.com`, `wsj.com` and `theatlantic.com`. Anything not in
    that list gets no cookies, whatever the file contains.
-2. **Export the cookies** from the browser profile where you are already signed
-   in. Any exporter that writes the Netscape/`curl` format works; on Chrome,
-   *Get cookies.txt LOCALLY* is open-source and exports without uploading
-   anywhere. Treat this step with care either way: an extension that can read
-   your cookies can read *all* of them, so prefer an open-source one, check what
-   it requests, and remove it when you're done.
-3. **Point the tool at the file** and keep it private:
+2. **Export the cookies** from a browser you are already signed in with:
 
    ```bash
-   mv ~/Downloads/cookies.txt ~/ai-news-agent/cookies.txt
-   chmod 600 ~/ai-news-agent/cookies.txt
-   echo 'NEWS_COOKIES_FILE=/Users/you/ai-news-agent/cookies.txt' >> ~/ai-news-agent/.env
+   pip install 'ainews[cookies]'
+   ainews cookies --browser chrome      # also safari, firefox, edge, brave
+   ```
+
+   This reads your browser's own cookie store and writes a `cookies.txt` (mode
+   600) containing **only** the domains above. It prints cookie *names*, never
+   values. The alternative is a browser extension, and every cookies.txt
+   exporter needs permission to read *all* your cookies, for every site,
+   permanently — this avoids handing that to a third party. Exporting by hand
+   still works if you prefer; any Netscape/`curl`-format file will do.
+
+3. **Point the tool at the file:**
+
+   ```bash
+   echo "NEWS_COOKIES_FILE=$PWD/cookies.txt" >> .env
    ```
 
    `cookies.txt` and `.env` are both gitignored. The scheduled run reads `.env`
@@ -161,9 +168,47 @@ For full article text, hand it your own logged-in session as a Netscape-format
    `NYT Technology [paywalled]: 18 items` without the "using headlines and
    abstracts only" line.
 
-**Sessions expire**, and when they do nothing breaks loudly — every article
-comes back as a paywall stub and the digest just gets thinner. So the run says
-so once, with the fix:
+### What each publisher actually allows
+
+Valid cookies are necessary but not sufficient — the publisher also has to be
+willing to serve an article to a program. Measured against real logged-in
+sessions:
+
+| Publisher | Full article text? | Why |
+|---|---|---|
+| **The Atlantic** | **Yes** — 5–7k chars/article | `robots.txt` allows the article paths and the server serves them |
+| **NYT** | No — `HTTP 403` | `robots.txt` *allows* it, but the server refuses non-browser clients (note the `datadome` cookie). Not an auth failure — the cookies are fine |
+| **WSJ** | No — not requested | `robots.txt` **disallows** its article paths for every user-agent, so the fetcher doesn't ask |
+
+Both refusals are deliberate on the publishers' side, and the two obvious
+workarounds — spoofing a browser user-agent, or ignoring `robots.txt` — are
+things this tool [deliberately doesn't do](#subscription-sites-nyt--wsj--the-atlantic).
+`http.respect_robots: false` exists in the config; pointing it at a publisher
+that has explicitly disallowed you is your call to make, not the default.
+
+So NYT and WSJ still contribute **headlines, abstracts and links** — which is
+what the digest used before you added cookies. The digest says when it only saw
+an abstract. Adding cookies is worth it for The Atlantic, and for any other
+subscription whose robots.txt permits article access.
+
+Because those two can't succeed, they ship with `full_text: false`: asking for
+84 article bodies a week only to be refused wastes about two and a half minutes
+per run and pointlessly pesters the publishers. Set it back to `true` if either
+ever opens up.
+
+The run tells you which case you're in rather than leaving a domain quietly
+contributing nothing:
+
+```
+WARNING WSJ Tech: no article body for 37 of 37 items, though cookies for wsj.com
+        are loaded - this publisher refuses programmatic article requests (HTTP 403)
+        or disallows them in robots.txt. The digest will use headlines and abstracts
+        here. Re-exporting cookies will not help.
+```
+
+**Sessions expire** too, and that failure looks different: every article comes
+back as a paywall *stub* rather than nothing at all. So the run distinguishes
+them, because the fix is different:
 
 ```
 WARNING NYT: 12 of 18 articles read as paywall stubs despite having cookies
@@ -391,7 +436,7 @@ producing nothing.
 
 ```bash
 pip install -e ".[dev]"
-pytest            # 116 tests, no network required
+pytest            # 118 tests, no network required
 ```
 
 Tests cover URL normalization and dedupe, config/env expansion, article

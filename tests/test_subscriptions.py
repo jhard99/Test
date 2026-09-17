@@ -177,3 +177,39 @@ def test_a_cached_stub_is_still_flagged_as_paywalled(tmp_path):
     assert second[0].extra["paywalled"] is True, "cached stub lost its paywalled flag"
     assert len(fetcher.calls) == before + 1  # feed refetched, article cached
     ctx.store.close()
+
+
+def test_a_publisher_that_blocks_programs_is_reported_separately(tmp_path, caplog):
+    """WSJ's robots.txt disallows article paths; NYT answers 403 to a non-browser
+    client. Either way nothing comes back, the cookies are fine, and re-exporting
+    them would not help - so this must not read as an expired session."""
+    feed = "https://nyt.example/feed"
+    entries = [(f"Story {i}", f"https://nyt.example/{i}", NOW, "teaser") for i in range(4)]
+    # The feed resolves; the article URLs do not - the fetcher returns None for a
+    # 403 exactly as it does for a robots.txt refusal.
+    fetcher = FakeFetcher({feed: FakeResponse(rss_bytes(entries))}, authenticated={"nytimes.com"})
+    ctx = _ctx(tmp_path, fetcher, "blocked")
+
+    with caplog.at_level("WARNING"):
+        items = _paywalled_source(ctx, feed).fetch(SINCE)
+
+    assert len(items) == 4
+    assert all(not (i.text or "").strip() for i in items)
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("no article body for 4 of 4" in w for w in warnings), warnings
+    assert any("Re-exporting cookies will not help" in w for w in warnings), warnings
+    # Must not be mistaken for the expiry case.
+    assert not any("probably expired" in w for w in warnings), warnings
+    ctx.store.close()
+
+
+def test_unfetchable_articles_are_not_reported_when_unauthenticated(tmp_path, caplog):
+    """Without cookies, full_text is off and no body is expected - stay silent."""
+    feed = "https://nyt.example/feed"
+    entries = [(f"Story {i}", f"https://nyt.example/{i}", NOW, "teaser") for i in range(4)]
+    fetcher = FakeFetcher({feed: FakeResponse(rss_bytes(entries))})
+    ctx = _ctx(tmp_path, fetcher, "blocked-anon")
+    with caplog.at_level("WARNING"):
+        _paywalled_source(ctx, feed).fetch(SINCE)
+    assert not [r for r in caplog.records if "no article body" in r.getMessage()]
+    ctx.store.close()
