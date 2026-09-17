@@ -191,6 +191,11 @@ what the digest used before you added cookies. The digest says when it only saw
 an abstract. Adding cookies is worth it for The Atlantic, and for any other
 subscription whose robots.txt permits article access.
 
+Because those two can't succeed, they ship with `full_text: false`: asking for
+84 article bodies a week only to be refused wastes about two and a half minutes
+per run and pointlessly pesters the publishers. Set it back to `true` if either
+ever opens up.
+
 The run tells you which case you're in rather than leaving a domain quietly
 contributing nothing:
 
