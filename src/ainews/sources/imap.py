@@ -14,6 +14,7 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 
+from ainews.credentials import clean_credential
 from ainews.extract import extract_links, html_to_text
 from ainews.models import Item
 from ainews.sources.base import Source, register
@@ -21,32 +22,6 @@ from ainews.sources.base import Source, register
 log = logging.getLogger(__name__)
 
 _MAX_BODY_CHARS = 60_000
-
-
-def _clean_credential(value: str, label: str, source: str) -> str:
-    """Remove whitespace from an IMAP username or password.
-
-    Gmail shows an App Password as four groups of four characters, and copying
-    it out of that page brings the separators along - as U+00A0 non-breaking
-    spaces, not plain ones. `imaplib` encodes command arguments as ASCII, so a
-    pasted password raises UnicodeEncodeError before anything is sent, and
-    because a failing source is caught per-source the only symptom is that
-    newsletters quietly never appear.
-
-    App passwords are meant to be entered without the spaces, and mail clients
-    strip them, so do the same. A genuine space inside an IMAP password is
-    vanishingly rare next to this paste, but say when something was removed so
-    a changed login is explainable.
-    """
-    cleaned = "".join(value.split())
-    if cleaned != value:
-        log.info(
-            "%s: removed whitespace from the IMAP %s (a pasted Gmail App Password "
-            "carries non-breaking spaces that imaplib cannot encode)",
-            source,
-            label,
-        )
-    return cleaned
 
 
 def _clean_folder(value: str) -> str:
@@ -135,8 +110,8 @@ class ImapSource(Source):
         try:
             with imaplib.IMAP4_SSL(host, port) as conn:
                 conn.login(
-                    _clean_credential(str(self.options["username"]), "username", self.name),
-                    _clean_credential(str(self.options["password"]), "password", self.name),
+                    clean_credential(str(self.options["username"]), "username", self.name),
+                    clean_credential(str(self.options["password"]), "password", self.name),
                 )
                 status, _ = conn.select(folder, readonly=not mark_seen)
                 if status != "OK":

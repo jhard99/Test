@@ -1,6 +1,7 @@
 from email.message import EmailMessage
 
-from ainews.sources.imap import _clean_credential, _clean_folder, _decode, message_body
+from ainews.credentials import clean_credential as _clean_credential
+from ainews.sources.imap import _clean_folder, _decode, message_body
 
 
 def build_newsletter() -> EmailMessage:

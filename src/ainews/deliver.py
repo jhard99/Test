@@ -9,6 +9,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 
 from ainews.config import SmtpConfig
+from ainews.credentials import clean_credential
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,16 @@ def send_email(cfg: SmtpConfig, subject: str, text_body: str, html_body: str) ->
         ) from exc
     except smtplib.SMTPException as exc:
         raise DeliveryError(f"SMTP error talking to {cfg.host}:{cfg.port}: {exc}") from exc
+    except UnicodeEncodeError as exc:
+        # smtplib encodes the AUTH exchange as ASCII. Whitespace is stripped
+        # above, so reaching here means some other non-ASCII character is in the
+        # credentials - report it as a delivery failure rather than a traceback,
+        # since by now the digest has been written and is worth keeping.
+        raise DeliveryError(
+            f"SMTP credentials for {cfg.username!r} contain a character that cannot be "
+            f"sent ({exc.reason}: {exc.object[exc.start:exc.end]!r}). Retype them rather "
+            "than pasting."
+        ) from exc
     except OSError as exc:
         raise DeliveryError(f"Could not reach {cfg.host}:{cfg.port}: {exc}") from exc
 
@@ -63,5 +74,12 @@ def send_email(cfg: SmtpConfig, subject: str, text_body: str, html_body: str) ->
 
 def _login_and_send(server: smtplib.SMTP, cfg: SmtpConfig, msg: EmailMessage) -> None:
     if cfg.username and cfg.password:
-        server.login(cfg.username, cfg.password)
+        # Same repair as the IMAP reader: a Gmail App Password pasted with its
+        # non-breaking spaces cannot be ASCII-encoded, and smtplib raises while
+        # building the AUTH response - after the digest has been written, so the
+        # week's work is complete and then thrown away at the last step.
+        server.login(
+            clean_credential(cfg.username, "SMTP username", "delivery"),
+            clean_credential(cfg.password, "SMTP password", "delivery"),
+        )
     server.send_message(msg)
