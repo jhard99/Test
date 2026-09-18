@@ -45,6 +45,40 @@ jobs:
   digest:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    # Job-level rather than on the digest step alone, so that `ainews check
+    # --probe` sees the same credentials the real run will. Scoped to one step,
+    # the probe reported "[MISSING] newsletters (needs: username, password)"
+    # while the very next step logged in fine - a confusing way to be told
+    # nothing is wrong.
+    env:
+      # Only needed with llm.provider: anthropic. For Bedrock, drop this and add
+      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION secrets (or
+      # configure OIDC with aws-actions/configure-aws-credentials); for Vertex,
+      # authenticate with google-github-actions/auth and set GCP_PROJECT. With
+      # llm.enabled: false, no model credentials are needed at all.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+      # Reddit's robots.txt disallows anonymous reads, so the reddit source uses
+      # the OAuth API. Register a "script" app at
+      # https://www.reddit.com/prefs/apps. Unset = the source sits out.
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      IMAP_HOST: ${{ secrets.IMAP_HOST }}
+      IMAP_PORT: ${{ secrets.IMAP_PORT }}
+      IMAP_USER: ${{ secrets.IMAP_USER }}
+      IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+      IMAP_FOLDER: ${{ secrets.IMAP_FOLDER }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      DIGEST_FROM: ${{ secrets.DIGEST_FROM }}
+      DIGEST_TO: ${{ secrets.DIGEST_TO }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -110,33 +144,6 @@ jobs:
           fi
 
       - name: Generate and send digest
-        env:
-          # Only needed with llm.provider: anthropic. For Bedrock, drop this and
-          # add AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION secrets (or
-          # configure OIDC with aws-actions/configure-aws-credentials); for Vertex,
-          # authenticate with google-github-actions/auth and set GCP_PROJECT.
-          # With llm.enabled: false, no model credentials are needed at all.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-          # Reddit's robots.txt disallows anonymous reads, so the reddit source
-          # uses the OAuth API. Register a "script" app at
-          # https://www.reddit.com/prefs/apps. Unset = the source sits out.
-          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
-          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
-          IMAP_HOST: ${{ secrets.IMAP_HOST }}
-          IMAP_PORT: ${{ secrets.IMAP_PORT }}
-          IMAP_USER: ${{ secrets.IMAP_USER }}
-          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
-          IMAP_FOLDER: ${{ secrets.IMAP_FOLDER }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          DIGEST_FROM: ${{ secrets.DIGEST_FROM }}
-          DIGEST_TO: ${{ secrets.DIGEST_TO }}
         run: |
           python -m ainews --verbose run \
             --window-days "${{ github.event.inputs.window_days || 7 }}" \
